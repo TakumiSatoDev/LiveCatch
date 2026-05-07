@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import threading
 from pathlib import Path
+from urllib.parse import urlparse
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -20,10 +21,25 @@ MODE_RESERVATION = "reservation"
 MODE_LIVE_FULL = "live_full"
 MODE_CATCHUP_STOP = "catchup_stop"
 
+PLATFORM_YOUTUBE = "youtube"
+PLATFORM_TWITCH = "twitch"
+PLATFORM_UNKNOWN = "unknown"
+
+PLATFORM_LABELS = {
+    PLATFORM_YOUTUBE: "YouTube",
+    PLATFORM_TWITCH: "Twitch",
+    PLATFORM_UNKNOWN: "不明",
+}
+
+DEFAULT_OUTPUT_TEMPLATE = "%(extractor_key)s/%(upload_date)s_%(channel)s_%(title)s/%(upload_date)s_%(title)s.%(ext)s"
+LEGACY_DEFAULT_OUTPUT_TEMPLATE = "%(upload_date)s_%(channel)s_%(title)s/%(upload_date)s_%(title)s.%(ext)s"
+
 FRAG_RE = re.compile(r"^(?:(?P<stream>\d+):\s*)?.*?\(frag\s+(?P<current>\d+)\s*/\s*(?P<total>\d+)\)")
 
 QUALITY_PRESETS = {
     "おすすめ：1080p以下": "bv*[height<=1080]+ba/b[height<=1080]/b",
+    "追いつき優先：720p30以下": "bv*[height<=720][fps<=30]+ba/b[height<=720][fps<=30]/bv*[height<=720]+ba/b[height<=720]/b",
+    "追いつき優先：480p30以下": "bv*[height<=480][fps<=30]+ba/b[height<=480][fps<=30]/bv*[height<=480]+ba/b[height<=480]/b",
     "最高画質": "bv*+ba/b",
     "1440p以下": "bv*[height<=1440]+ba/b[height<=1440]/b",
     "1080p以下": "bv*[height<=1080]+ba/b[height<=1080]/b",
@@ -37,6 +53,7 @@ SPEED_PRESETS = ["1", "2", "4", "8", "16", "32", "64", "128"]
 MAX_LOG_LINES = 2500
 LOG_TRIM_LINES = 500
 DOWNLOAD_LOG_INTERVAL_SEC = 0.25
+CATCHUP_PROGRESS_LOG_INTERVAL_SEC = 10.0
 
 
 def app_dir():
@@ -62,6 +79,37 @@ def find_executable(name):
         return found
 
     return None
+
+
+def detect_platform(url):
+    raw_url = (url or "").strip()
+    if not raw_url:
+        return PLATFORM_UNKNOWN
+
+    parse_target = raw_url if "://" in raw_url else f"https://{raw_url}"
+    try:
+        parsed = urlparse(parse_target)
+    except Exception:
+        return PLATFORM_UNKNOWN
+
+    host = parsed.netloc.lower().split("@")[-1].split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    if host.startswith("m."):
+        host = host[2:]
+
+    if host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com"):
+        return PLATFORM_YOUTUBE
+    if host == "youtube-nocookie.com" or host.endswith(".youtube-nocookie.com"):
+        return PLATFORM_YOUTUBE
+    if host == "twitch.tv" or host.endswith(".twitch.tv"):
+        return PLATFORM_TWITCH
+
+    return PLATFORM_UNKNOWN
+
+
+def platform_label(platform):
+    return PLATFORM_LABELS.get(platform, PLATFORM_LABELS[PLATFORM_UNKNOWN])
 
 
 def load_config():
@@ -98,6 +146,8 @@ class LiveCatchApp(tk.Tk):
         self.catchup_candidate_since = None
         self.force_terminate_thread_started = False
         self.last_download_log_at = 0.0
+        self.last_catchup_progress_log_at = 0.0
+        self.catchup_progress_baseline = {}
 
         last_mode = self.config_data.get("mode", MODE_RESERVATION)
         if last_mode not in [MODE_RESERVATION, MODE_LIVE_FULL, MODE_CATCHUP_STOP]:
@@ -123,12 +173,10 @@ class LiveCatchApp(tk.Tk):
             last_concurrent_fragments = str(DEFAULT_CONCURRENT_FRAGMENTS)
         self.concurrent_fragments_var = tk.StringVar(value=last_concurrent_fragments)
 
-        self.output_template_var = tk.StringVar(
-            value=self.config_data.get(
-                "output_template",
-                "%(upload_date)s_%(channel)s_%(title)s/%(upload_date)s_%(title)s.%(ext)s",
-            )
-        )
+        saved_output_template = self.config_data.get("output_template", DEFAULT_OUTPUT_TEMPLATE)
+        if saved_output_template == LEGACY_DEFAULT_OUTPUT_TEMPLATE:
+            saved_output_template = DEFAULT_OUTPUT_TEMPLATE
+        self.output_template_var = tk.StringVar(value=saved_output_template)
 
         self._build_ui()
         self._apply_mode_ui()
@@ -143,7 +191,7 @@ class LiveCatchApp(tk.Tk):
 
         self.subtitle = ttk.Label(
             outer,
-            text="YouTubeライブの予約録画・配信中ライブの回収を行うGUIアプリです。",
+            text="YouTube/Twitchライブの予約録画・配信中ライブの回収を行うGUIアプリです。",
             foreground="#555",
         )
         self.subtitle.pack(anchor="w", pady=(2, 14))
@@ -214,7 +262,7 @@ class LiveCatchApp(tk.Tk):
 
         self.from_start_check = ttk.Checkbutton(
             options,
-            text="DVR有効ならライブ先頭から取得を試す（--live-from-start）",
+            text="対応サイトでライブ先頭から取得を試す（--live-from-start）",
             variable=self.from_start_var,
         )
         self.from_start_check.grid(row=1, column=0, columnspan=4, sticky="w", pady=4)
@@ -229,7 +277,7 @@ class LiveCatchApp(tk.Tk):
 
         speed_hint = ttk.Label(
             options,
-            text="速度はダウンロード並列数です。DVRに溜まった過去部分だけ速く回収できます。現在以降の未来部分は実時間以上には進みません。",
+            text="速度はダウンロード並列数です。DVRやライブ履歴に溜まった過去部分だけ速く回収できます。現在以降の未来部分は実時間以上には進みません。",
             foreground="#666",
         )
         speed_hint.grid(row=4, column=0, columnspan=6, sticky="w", pady=(8, 0))
@@ -258,8 +306,8 @@ class LiveCatchApp(tk.Tk):
         self.log_text.configure(yscrollcommand=scroll.set)
 
         help_text = (
-            "必要: yt-dlp と ffmpeg。PATHに入っていなくても、アプリ横の tools フォルダに置けば使えます。"
-            " build_exe.bat 実行時に tools が無ければ自動導入します。"
+            "必要: yt-dlp と ffmpeg。YouTube/Twitch URLを自動判定します。"
+            " PATHに入っていなくても、アプリ横の tools フォルダに置けば使えます。"
         )
         ttk.Label(outer, text=help_text, foreground="#666").pack(anchor="w", pady=(8, 0))
 
@@ -278,7 +326,7 @@ class LiveCatchApp(tk.Tk):
         if mode == MODE_RESERVATION:
             self.subtitle.configure(text="予約録画モード：配信待機枠URLを置いておくと、開始まで待機して自動録画します。")
             self.mode_hint.configure(
-                text="事前にURLが分かっている配信用。未開始なら待機し、配信開始後は終了まで録画します。"
+                text="事前にURLが分かっている配信用。YouTube/Twitch URLを判定し、未開始なら待機して録画します。"
             )
             self.start_btn.configure(text="予約録画を開始")
             self.wait_label.configure(text="開始確認間隔（秒）")
@@ -288,7 +336,7 @@ class LiveCatchApp(tk.Tk):
         elif mode == MODE_LIVE_FULL:
             self.subtitle.configure(text="配信中ライブを最後まで録画：途中参加でも開始地点から追って、そのまま配信終了まで録画します。")
             self.mode_hint.configure(
-                text="途中で気づいたけど、最初から最後まで素材として残したい時用。DVR有効なら開始地点から追いかけます。"
+                text="途中で気づいたけど、最初から最後まで素材として残したい時用。対応サイトでは開始地点から追いかけます。"
             )
             self.start_btn.configure(text="開始地点から最後まで録画")
             self.wait_label.configure(text="確認間隔（このモードでは未使用）")
@@ -299,7 +347,7 @@ class LiveCatchApp(tk.Tk):
         elif mode == MODE_CATCHUP_STOP:
             self.subtitle.configure(text="配信中ライブを現在まで取得：開始地点から現在地点まで取って、追いついたら停止します。")
             self.mode_hint.configure(
-                text="切り抜き用に『開始〜今』だけ欲しい時用。追いつき判定後、録画プロセスへ停止要求を送ります。"
+                text="切り抜き用に『開始〜今』だけ欲しい時用。fragmentログで追いつき判定できたら停止要求を送ります。"
             )
             self.start_btn.configure(text="現在地点まで取得")
             self.wait_label.configure(text="確認間隔（このモードでは未使用）")
@@ -352,8 +400,14 @@ class LiveCatchApp(tk.Tk):
         return QUALITY_PRESETS.get(label, QUALITY_PRESETS[DEFAULT_QUALITY_LABEL])
 
     def _validate(self):
-        if not self.url_var.get().strip():
-            messagebox.showerror(APP_NAME, "YouTubeライブURLを入力してください。")
+        url = self.url_var.get().strip()
+        if not url:
+            messagebox.showerror(APP_NAME, "YouTube または Twitch のライブURLを入力してください。")
+            return False
+
+        platform = detect_platform(url)
+        if platform == PLATFORM_UNKNOWN:
+            messagebox.showerror(APP_NAME, "対応しているURLは YouTube または Twitch です。")
             return False
 
         if self.mode_var.get() == MODE_RESERVATION:
@@ -369,7 +423,7 @@ class LiveCatchApp(tk.Tk):
             proceed = messagebox.askyesno(
                 APP_NAME,
                 "同時fragment数がかなり高い設定です。\n\n"
-                "回線やYouTube側の状況によっては失敗・速度低下・一時制限の原因になる場合があります。\n"
+                "回線や配信サイト側の状況によっては失敗・速度低下・一時制限の原因になる場合があります。\n"
                 "このまま続行しますか？"
             )
             if not proceed:
@@ -396,8 +450,12 @@ class LiveCatchApp(tk.Tk):
 
     def build_command(self):
         mode = self.mode_var.get()
+        url = self.url_var.get().strip()
+        if detect_platform(url) == PLATFORM_UNKNOWN:
+            raise ValueError("対応しているURLは YouTube または Twitch です。")
+
         save_dir = Path(self.save_dir_var.get()).expanduser()
-        out_tmpl = self.output_template_var.get().strip() or "%(upload_date)s_%(title)s.%(ext)s"
+        out_tmpl = self.output_template_var.get().strip() or DEFAULT_OUTPUT_TEMPLATE
         output_path = str(save_dir / out_tmpl)
 
         yt_dlp_path = find_executable("yt-dlp") or "yt-dlp"
@@ -437,7 +495,7 @@ class LiveCatchApp(tk.Tk):
         if self.cookies_var.get():
             cmd.extend(["--cookies-from-browser", self.browser_var.get()])
 
-        cmd.append(self.url_var.get().strip())
+        cmd.append(url)
         return cmd
 
     def save_current_config(self):
@@ -464,7 +522,9 @@ class LiveCatchApp(tk.Tk):
 
     def show_command(self):
         try:
+            platform = detect_platform(self.url_var.get())
             cmd = self.build_command()
+            self._log(f"判定プラットフォーム: {platform_label(platform)}\n")
             self._log("実行予定コマンド:\n" + subprocess.list2cmdline(cmd) + "\n\n")
         except Exception as e:
             messagebox.showerror(APP_NAME, str(e))
@@ -484,9 +544,12 @@ class LiveCatchApp(tk.Tk):
         self.catchup_candidate_since = None
         self.force_terminate_thread_started = False
         self.last_download_log_at = 0.0
+        self.last_catchup_progress_log_at = 0.0
+        self.catchup_progress_baseline = {}
 
         cmd = self.build_command()
         mode = self.mode_var.get()
+        platform = detect_platform(self.url_var.get())
         mode_label = {
             MODE_RESERVATION: "予約録画",
             MODE_LIVE_FULL: "配信中ライブを最後まで録画",
@@ -494,9 +557,12 @@ class LiveCatchApp(tk.Tk):
         }.get(mode, "録画")
 
         self._log(f"{mode_label}を開始しました。\n")
+        self._log(f"プラットフォーム: {platform_label(platform)}\n")
         self._log(f"画質: {self.quality_preset_var.get()} / 速度: 同時fragment数 {self._get_concurrent_fragments()}\n")
         if mode == MODE_CATCHUP_STOP:
             self._log("追いつき判定: fragment の現在値が最新値付近に到達したら停止要求を送ります。\n")
+            if platform == PLATFORM_TWITCH:
+                self._log("Twitchの追いつき停止は yt-dlp のfragmentログが取得できる場合に動作します。\n")
         self._log(subprocess.list2cmdline(cmd) + "\n\n")
 
         self.is_running = True
@@ -571,6 +637,8 @@ class LiveCatchApp(tk.Tk):
             "updated_at": now,
         }
 
+        self._log_catchup_progress(now)
+
         if now - self.run_started_at < 15:
             return
         if total < 20:
@@ -600,6 +668,57 @@ class LiveCatchApp(tk.Tk):
                 self._send_graceful_interrupt()
         else:
             self.catchup_candidate_since = None
+
+    def _log_catchup_progress(self, now):
+        if now - self.last_catchup_progress_log_at < CATCHUP_PROGRESS_LOG_INTERVAL_SEC:
+            return
+
+        active_items = [
+            (stream_id, state)
+            for stream_id, state in self.catchup_frag_state.items()
+            if now - state["updated_at"] <= 10
+        ]
+        if not active_items:
+            return
+
+        parts = []
+        for stream_id, state in active_items:
+            current = state["current"]
+            total = state["total"]
+            remaining = max(total - current, 0)
+
+            baseline = self.catchup_progress_baseline.get(stream_id)
+            if baseline:
+                prev_current, prev_time = baseline
+                elapsed = max(now - prev_time, 0.001)
+                rate = max(current - prev_current, 0) / elapsed
+            else:
+                rate = 0.0
+
+            if rate > 0 and remaining > 0:
+                eta_text = f" / 現在地点まで約{self._format_duration(remaining / rate)}"
+            elif remaining == 0:
+                eta_text = " / 現在地点付近"
+            else:
+                eta_text = ""
+
+            parts.append(
+                f"{stream_id}: {current}/{total} 残{remaining} / {rate:.1f} frag/s{eta_text}"
+            )
+            self.catchup_progress_baseline[stream_id] = (current, now)
+
+        self.last_catchup_progress_log_at = now
+        self.log_queue.put("追いつき状況: " + " | ".join(parts) + "\n")
+
+    def _format_duration(self, seconds):
+        seconds = max(int(seconds), 0)
+        minutes, sec = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}時間{minutes}分"
+        if minutes:
+            return f"{minutes}分{sec}秒"
+        return f"{sec}秒"
 
     def _send_graceful_interrupt(self):
         if not self.proc or self.proc.poll() is not None:
