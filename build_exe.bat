@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ================================
-echo LiveCatch v1.1.1 Build Script
+echo LiveCatch v2.1.3 Build Script
 echo ================================
 echo.
 

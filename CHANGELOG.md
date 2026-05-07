@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.1.3
+
+### Added
+
+- YouTube / Twitch URL auto-detection.
+- Japanese / English language switching menu.
+- Catch-up priority quality presets.
+- Catch-up progress logging with fragment rate and estimated remaining time.
+- Output format selection: mp4 / mkv / webm.
+- Fast temporary folder support using `yt-dlp -P home` / `-P temp`.
+- Lightweight post-processing option for download-up-to-now mode.
+
+### Changed
+
+- Default output template now separates YouTube and Twitch by `%(extractor_key)s`.
+- Quality presets are stored internally by stable keys so language switching does not break saved settings.
+
 ## v1.1.1
 
 ### Fixed / Optimized

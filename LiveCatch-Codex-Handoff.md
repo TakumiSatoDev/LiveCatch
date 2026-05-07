@@ -15,7 +15,7 @@ Primary target users:
 The project is currently at:
 
 ```text
-LiveCatch v1.1.1
+LiveCatch v2.1.3
 ```
 
 ## Current Goal
@@ -37,7 +37,7 @@ The next developer/Codex task is to:
 Expected current structure:
 
 ```text
-LiveCatch-v1.1.1/
+LiveCatch-v2.1.3/
 ├─ livecatch.py
 ├─ install_tools.ps1
 ├─ build_exe.bat
@@ -251,7 +251,7 @@ Important saved settings:
 
 ```json
 {
-  "version": "1.1.1",
+  "version": "2.1.3",
   "mode": "reservation",
   "url": "",
   "save_dir": "...",
@@ -532,7 +532,7 @@ These are acceptable if done carefully:
    - Avoid large behavioral refactors unless necessary.
 
 6. Add version display:
-   - Already included in title and header as `LiveCatch v1.1.1`.
+   - Already included in title and header as `LiveCatch v2.1.3`.
 
 ## Suggested Future Features
 
@@ -634,7 +634,7 @@ Avoid positioning the tool as a way to bypass rights or restrictions.
 
 ## Current Status Summary
 
-LiveCatch v1.1.1 is a working MVP/release candidate.
+LiveCatch v2.1.3 is a working MVP/release candidate.
 
 The most important next step is a careful code cleanup pass, not a major feature rewrite.
 
