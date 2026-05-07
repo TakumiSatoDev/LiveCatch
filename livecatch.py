@@ -13,7 +13,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 APP_NAME = "LiveCatch"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.1"
 CONFIG_FILE = Path.home() / ".livecatch_config.json"
 
 MODE_RESERVATION = "reservation"
@@ -21,6 +21,22 @@ MODE_LIVE_FULL = "live_full"
 MODE_CATCHUP_STOP = "catchup_stop"
 
 FRAG_RE = re.compile(r"^(?:(?P<stream>\d+):\s*)?.*?\(frag\s+(?P<current>\d+)\s*/\s*(?P<total>\d+)\)")
+
+QUALITY_PRESETS = {
+    "おすすめ：1080p以下": "bv*[height<=1080]+ba/b[height<=1080]/b",
+    "最高画質": "bv*+ba/b",
+    "1440p以下": "bv*[height<=1440]+ba/b[height<=1440]/b",
+    "1080p以下": "bv*[height<=1080]+ba/b[height<=1080]/b",
+    "720p以下": "bv*[height<=720]+ba/b[height<=720]/b",
+    "480p以下": "bv*[height<=480]+ba/b[height<=480]/b",
+    "360p以下": "bv*[height<=360]+ba/b[height<=360]/b",
+}
+DEFAULT_QUALITY_LABEL = "おすすめ：1080p以下"
+DEFAULT_CONCURRENT_FRAGMENTS = 8
+SPEED_PRESETS = ["1", "2", "4", "8", "16", "32", "64", "128"]
+MAX_LOG_LINES = 2500
+LOG_TRIM_LINES = 500
+DOWNLOAD_LOG_INTERVAL_SEC = 0.25
 
 
 def app_dir():
@@ -80,6 +96,8 @@ class LiveCatchApp(tk.Tk):
         self.catchup_frag_state = {}
         self.catchup_stop_sent = False
         self.catchup_candidate_since = None
+        self.force_terminate_thread_started = False
+        self.last_download_log_at = 0.0
 
         last_mode = self.config_data.get("mode", MODE_RESERVATION)
         if last_mode not in [MODE_RESERVATION, MODE_LIVE_FULL, MODE_CATCHUP_STOP]:
@@ -94,7 +112,15 @@ class LiveCatchApp(tk.Tk):
         self.from_start_var = tk.BooleanVar(value=self.config_data.get("live_from_start", True))
         self.info_json_var = tk.BooleanVar(value=self.config_data.get("write_info_json", True))
         self.metadata_var = tk.BooleanVar(value=self.config_data.get("embed_metadata", True))
-        self.format_var = tk.StringVar(value=self.config_data.get("format", "bv*+ba/b"))
+
+        last_quality = self.config_data.get("quality_preset", DEFAULT_QUALITY_LABEL)
+        if last_quality not in QUALITY_PRESETS:
+            last_quality = DEFAULT_QUALITY_LABEL
+        self.quality_preset_var = tk.StringVar(value=last_quality)
+        self.concurrent_fragments_var = tk.StringVar(
+            value=str(self.config_data.get("concurrent_fragments", DEFAULT_CONCURRENT_FRAGMENTS))
+        )
+
         self.output_template_var = tk.StringVar(
             value=self.config_data.get(
                 "output_template",
@@ -164,7 +190,6 @@ class LiveCatchApp(tk.Tk):
         ttk.Label(form, text="保存先").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=5)
 
         self._row(form, 2, "出力テンプレート", self.output_template_var, width=92)
-        self._row(form, 3, "フォーマット", self.format_var, width=42)
 
         options = ttk.LabelFrame(outer, text="録画オプション", padding=10)
         options.pack(fill="x", pady=(14, 10))
@@ -175,20 +200,37 @@ class LiveCatchApp(tk.Tk):
         self.wait_entry = ttk.Entry(options, textvariable=self.wait_var, width=8)
         self.wait_entry.grid(row=0, column=1, sticky="w", pady=4)
 
+        ttk.Label(options, text="速度（同時fragment数）").grid(row=0, column=2, sticky="e", padx=(28, 8), pady=4)
+        speed_box = ttk.Combobox(options, textvariable=self.concurrent_fragments_var, values=SPEED_PRESETS, width=8, state="readonly")
+        speed_box.grid(row=0, column=3, sticky="w", pady=4)
+        speed_box.bind("<<ComboboxSelected>>", lambda _event: self.save_current_config())
+
+        ttk.Label(options, text="画質").grid(row=0, column=4, sticky="e", padx=(28, 8), pady=4)
+        quality_box = ttk.Combobox(options, textvariable=self.quality_preset_var, values=list(QUALITY_PRESETS.keys()), width=22, state="readonly")
+        quality_box.grid(row=0, column=5, sticky="w", pady=4)
+        quality_box.bind("<<ComboboxSelected>>", lambda _event: self.save_current_config())
+
         self.from_start_check = ttk.Checkbutton(
             options,
             text="DVR有効ならライブ先頭から取得を試す（--live-from-start）",
             variable=self.from_start_var,
         )
-        self.from_start_check.grid(row=1, column=0, columnspan=3, sticky="w", pady=4)
+        self.from_start_check.grid(row=1, column=0, columnspan=4, sticky="w", pady=4)
 
         ttk.Checkbutton(options, text="info.jsonを書き出す", variable=self.info_json_var).grid(row=2, column=0, columnspan=3, sticky="w", pady=4)
         ttk.Checkbutton(options, text="メタデータを埋め込む", variable=self.metadata_var).grid(row=3, column=0, columnspan=3, sticky="w", pady=4)
 
-        ttk.Checkbutton(options, text="ブラウザCookieを使う", variable=self.cookies_var).grid(row=0, column=3, sticky="w", padx=(28, 8), pady=4)
-        ttk.Label(options, text="ブラウザ").grid(row=0, column=4, sticky="e", padx=(8, 6), pady=4)
+        ttk.Checkbutton(options, text="ブラウザCookieを使う", variable=self.cookies_var).grid(row=2, column=3, sticky="w", padx=(28, 8), pady=4)
+        ttk.Label(options, text="ブラウザ").grid(row=2, column=4, sticky="e", padx=(8, 6), pady=4)
         browser_box = ttk.Combobox(options, textvariable=self.browser_var, values=["chrome", "edge", "firefox", "brave", "vivaldi", "opera"], width=12, state="readonly")
-        browser_box.grid(row=0, column=5, sticky="w", pady=4)
+        browser_box.grid(row=2, column=5, sticky="w", pady=4)
+
+        speed_hint = ttk.Label(
+            options,
+            text="速度はダウンロード並列数です。DVRに溜まった過去部分だけ速く回収できます。現在以降の未来部分は実時間以上には進みません。",
+            foreground="#666",
+        )
+        speed_hint.grid(row=4, column=0, columnspan=6, sticky="w", pady=(8, 0))
 
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x", pady=(6, 10))
@@ -291,6 +333,22 @@ class LiveCatchApp(tk.Tk):
         except Exception as e:
             self._log(f"{label} version check error: {e}\n")
 
+    def _get_concurrent_fragments(self):
+        try:
+            value = int(self.concurrent_fragments_var.get())
+        except ValueError:
+            value = DEFAULT_CONCURRENT_FRAGMENTS
+
+        if value < 1:
+            value = 1
+        if value > 128:
+            value = 128
+        return value
+
+    def _get_format_selector(self):
+        label = self.quality_preset_var.get()
+        return QUALITY_PRESETS.get(label, QUALITY_PRESETS[DEFAULT_QUALITY_LABEL])
+
     def _validate(self):
         if not self.url_var.get().strip():
             messagebox.showerror(APP_NAME, "YouTubeライブURLを入力してください。")
@@ -303,6 +361,16 @@ class LiveCatchApp(tk.Tk):
                     raise ValueError
             except ValueError:
                 messagebox.showerror(APP_NAME, "開始確認間隔は5秒以上の整数にしてください。")
+                return False
+
+        if self._get_concurrent_fragments() >= 64:
+            proceed = messagebox.askyesno(
+                APP_NAME,
+                "同時fragment数がかなり高い設定です。\n\n"
+                "回線やYouTube側の状況によっては失敗・速度低下・一時制限の原因になる場合があります。\n"
+                "このまま続行しますか？"
+            )
+            if not proceed:
                 return False
 
         if find_executable("yt-dlp") is None:
@@ -334,9 +402,13 @@ class LiveCatchApp(tk.Tk):
         ffmpeg_path = find_executable("ffmpeg")
         ffmpeg_dir = str(Path(ffmpeg_path).parent) if ffmpeg_path else None
 
+        concurrent_fragments = self._get_concurrent_fragments()
+        format_selector = self._get_format_selector()
+
         cmd = [
             yt_dlp_path,
-            "-f", self.format_var.get().strip() or "bv*+ba/b",
+            "-N", str(concurrent_fragments),
+            "-f", format_selector,
             "--merge-output-format", "mp4",
             "--newline",
             "-o", output_path,
@@ -383,7 +455,8 @@ class LiveCatchApp(tk.Tk):
             "live_from_start": self.from_start_var.get(),
             "write_info_json": self.info_json_var.get(),
             "embed_metadata": self.metadata_var.get(),
-            "format": self.format_var.get(),
+            "quality_preset": self.quality_preset_var.get(),
+            "concurrent_fragments": self._get_concurrent_fragments(),
             "output_template": self.output_template_var.get(),
         })
 
@@ -407,6 +480,8 @@ class LiveCatchApp(tk.Tk):
         self.catchup_frag_state = {}
         self.catchup_stop_sent = False
         self.catchup_candidate_since = None
+        self.force_terminate_thread_started = False
+        self.last_download_log_at = 0.0
 
         cmd = self.build_command()
         mode = self.mode_var.get()
@@ -417,6 +492,7 @@ class LiveCatchApp(tk.Tk):
         }.get(mode, "録画")
 
         self._log(f"{mode_label}を開始しました。\n")
+        self._log(f"画質: {self.quality_preset_var.get()} / 速度: 同時fragment数 {self._get_concurrent_fragments()}\n")
         if mode == MODE_CATCHUP_STOP:
             self._log("追いつき判定: fragment の現在値が最新値付近に到達したら停止要求を送ります。\n")
         self._log(subprocess.list2cmdline(cmd) + "\n\n")
@@ -447,8 +523,9 @@ class LiveCatchApp(tk.Tk):
 
             assert self.proc.stdout is not None
             for line in self.proc.stdout:
-                self.log_queue.put(line)
                 self._maybe_stop_when_caught_up(line)
+                if self._should_display_log(line):
+                    self.log_queue.put(line)
 
             code = self.proc.wait()
             self.log_queue.put(f"\n録画プロセスが終了しました。終了コード: {code}\n")
@@ -457,6 +534,17 @@ class LiveCatchApp(tk.Tk):
         finally:
             self.proc = None
             self.log_queue.put("__PROCESS_DONE__")
+
+    def _should_display_log(self, line):
+        # yt-dlp can emit a huge number of fragment progress lines.
+        # The catch-up detector still reads every line, but the GUI only displays
+        # a throttled subset so long recordings do not make Tkinter sluggish.
+        if "[download]" in line and "frag" in line:
+            now = time.time()
+            if now - self.last_download_log_at < DOWNLOAD_LOG_INTERVAL_SEC:
+                return False
+            self.last_download_log_at = now
+        return True
 
     def _maybe_stop_when_caught_up(self, line):
         if self.mode_var.get() != MODE_CATCHUP_STOP:
@@ -527,7 +615,9 @@ class LiveCatchApp(tk.Tk):
             except Exception as e2:
                 self.log_queue.put(f"terminate にも失敗しました: {e2}\n")
 
-        threading.Thread(target=self._force_terminate_later, daemon=True).start()
+        if not self.force_terminate_thread_started:
+            self.force_terminate_thread_started = True
+            threading.Thread(target=self._force_terminate_later, daemon=True).start()
 
     def _force_terminate_later(self):
         time.sleep(45)
@@ -554,9 +644,11 @@ class LiveCatchApp(tk.Tk):
             subprocess.Popen(["xdg-open", str(d)])
 
     def _poll_log_queue(self):
+        processed = 0
         try:
-            while True:
+            while processed < 200:
                 msg = self.log_queue.get_nowait()
+                processed += 1
                 if msg == "__PROCESS_DONE__":
                     self.is_running = False
                     self.start_btn.configure(state="normal")
@@ -570,7 +662,16 @@ class LiveCatchApp(tk.Tk):
 
     def _log(self, msg):
         self.log_text.insert("end", msg)
+        self._trim_log_if_needed()
         self.log_text.see("end")
+
+    def _trim_log_if_needed(self):
+        try:
+            line_count = int(self.log_text.index("end-1c").split(".")[0])
+            if line_count > MAX_LOG_LINES:
+                self.log_text.delete("1.0", f"{LOG_TRIM_LINES}.0")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

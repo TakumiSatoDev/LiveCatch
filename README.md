@@ -12,6 +12,8 @@
 - 最後に使ったモードを保存
 - 保存先フォルダ指定
 - ブラウザCookie対応
+- 速度設定：同時fragment数をプルダウンで変更
+- 画質設定：最高画質 / 1440p / 1080p / 720p / 480p / 360p をプルダウンで変更
 - `winget` 不要のローカルツール導入
 - `yt-dlp` / `ffmpeg` を `tools` フォルダから自動検出
 - Windows向け exe 化対応
@@ -45,6 +47,135 @@
 ```
 
 切り抜き用に「開始から今まで」だけ欲しい時用です。
+
+## Speed setting
+
+LiveCatchの「速度」は、ディスクへの書き込み速度を直接変える設定ではありません。
+
+内部的には `yt-dlp` の `-N` / `--concurrent-fragments` に相当する設定で、DVRに溜まっている過去部分のfragmentを同時にいくつ取得するかを指定します。
+
+```text
+同時fragment数 1   = 安定重視
+同時fragment数 8   = 初期値・おすすめ
+同時fragment数 16  = 高速寄り
+同時fragment数 32  = 強め
+同時fragment数 64+ = 実験寄り
+```
+
+速くできるのは、すでに配信済みでDVRに溜まっている過去部分だけです。現在以降の未来部分は、配信が進む速度以上には取得できません。
+
+## Quality setting
+
+画質はプルダウンから選べます。
+
+```text
+おすすめ：1080p以下
+最高画質
+1440p以下
+1080p以下
+720p以下
+480p以下
+360p以下
+```
+
+初期値は **おすすめ：1080p以下** です。
+
+理由は、切り抜き用途で扱いやすく、速度・容量・画質のバランスが良いためです。
+
+## Recommended settings by environment
+
+### 低スペックPC / Wi-Fi環境
+
+想定：
+
+```text
+CPU: 古めのCore i3 / Ryzen 3 相当
+RAM: 8GB
+保存先: HDD or 遅めのSSD
+回線: Wi-Fi / 100Mbps未満
+```
+
+おすすめ：
+
+```text
+速度: 4
+画質: 720p以下
+保存先: SSD推奨
+```
+
+安定優先です。HDD保存の場合は、長時間配信で重くなる可能性があります。
+
+### 標準PC / 一般的な光回線
+
+想定：
+
+```text
+CPU: Core i5 / Ryzen 5 相当
+RAM: 16GB
+保存先: SSD
+回線: 光回線 / 実効100〜300Mbps程度
+```
+
+おすすめ：
+
+```text
+速度: 8
+画質: おすすめ：1080p以下
+保存先: SSD
+```
+
+LiveCatchの初期設定です。まずはここから試してください。
+
+### 高性能PC / 有線LAN
+
+想定：
+
+```text
+CPU: Core i7 / Ryzen 7 相当以上
+RAM: 16GB〜32GB
+保存先: NVMe SSD
+回線: 有線LAN / 実効300Mbps以上
+```
+
+おすすめ：
+
+```text
+速度: 16
+画質: 1080p以下 or 1440p以下
+保存先: NVMe SSD
+```
+
+DVRの過去部分をかなり速く回収できます。失敗が増える場合は速度を8に下げてください。
+
+### かなり強い環境 / 動作テスト用
+
+想定：
+
+```text
+CPU: 高性能CPU
+RAM: 32GB以上
+保存先: 高速NVMe SSD
+回線: 実効500Mbps〜1Gbps級
+```
+
+おすすめ：
+
+```text
+速度: 32
+画質: 最高画質 or 1440p以下
+保存先: NVMe SSD
+```
+
+これは高速回収テスト向けです。YouTube側やネットワーク状況によっては失敗・速度低下・一時的な制限が起きる場合があります。
+
+### 実験設定
+
+```text
+速度: 64 or 128
+画質: 最高画質
+```
+
+かなり攻めた設定です。回線やYouTube側に負荷がかかり、fragment失敗が増える可能性があります。普段使いではおすすめしません。
 
 ## Requirements
 
@@ -97,8 +228,9 @@ C:\Users\<ユーザー名>\.livecatch_config.json
 - URL
 - 保存先
 - Cookie設定
+- 速度設定
+- 画質設定
 - 出力テンプレート
-- フォーマット設定
 
 ## Notes
 
@@ -106,3 +238,14 @@ C:\Users\<ユーザー名>\.livecatch_config.json
 - 「現在まで取得」モードは、`yt-dlp` の fragment ログを見て追いつき判定します。
 - YouTubeや `yt-dlp` 側の出力仕様が変わると調整が必要になる場合があります。
 - 配信者・権利者の許可がある用途で使用してください。
+
+
+## v1.1.1 maintenance notes
+
+This release keeps the v1.1.0 feature set and focuses on safety/cleanup:
+
+- The GUI log now trims old lines automatically so long downloads do not keep growing memory usage.
+- High-frequency download progress logs are throttled in the GUI while the internal catch-up detector still reads every line.
+- Repeated stop requests no longer spawn multiple force-terminate watcher threads.
+- `install_tools.ps1` skips downloading tools that already exist, while still copying them into `dist/tools` when needed.
+- `build_exe.bat` uses PyInstaller `--clean` to reduce stale build-cache issues.

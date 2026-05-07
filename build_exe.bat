@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ================================
-echo LiveCatch v1.0.0 Build Script
+echo LiveCatch v1.1.1 Build Script
 echo ================================
 echo.
 
@@ -44,7 +44,7 @@ python -m pip install pyinstaller
 
 echo.
 echo Building LiveCatch.exe...
-pyinstaller --onefile --windowed --name LiveCatch livecatch.py
+pyinstaller --clean --onefile --windowed --name LiveCatch livecatch.py
 
 echo.
 echo Copying tools to dist\tools...
