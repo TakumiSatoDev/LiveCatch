@@ -32,6 +32,10 @@ MANIFEST
 *.manifest
 *.spec
 
+# LiveCatch local tool/cache output
+tools/
+_tmp_install/
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt

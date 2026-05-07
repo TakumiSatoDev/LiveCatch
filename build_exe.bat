@@ -7,34 +7,38 @@ echo LiveCatch v1.1.1 Build Script
 echo ================================
 echo.
 
+set "TOOLS_MISSING=0"
+
 if not exist "%~dp0tools\yt-dlp.exe" (
     echo tools\yt-dlp.exe was not found.
-    echo Running install_tools.ps1 first...
-    echo.
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_tools.ps1"
-
-    if not exist "%~dp0tools\yt-dlp.exe" (
-        echo.
-        echo ERROR: yt-dlp.exe was still not found after running install_tools.ps1.
-        echo Build stopped.
-        pause
-        exit /b 1
-    )
+    set "TOOLS_MISSING=1"
 )
 
 if not exist "%~dp0tools\ffmpeg.exe" (
     echo tools\ffmpeg.exe was not found.
+    set "TOOLS_MISSING=1"
+)
+
+if "%TOOLS_MISSING%"=="1" (
     echo Running install_tools.ps1 first...
     echo.
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_tools.ps1"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_tools.ps1" -NoPause
+)
 
-    if not exist "%~dp0tools\ffmpeg.exe" (
-        echo.
-        echo ERROR: ffmpeg.exe was still not found after running install_tools.ps1.
-        echo Build stopped.
-        pause
-        exit /b 1
-    )
+if not exist "%~dp0tools\yt-dlp.exe" (
+    echo.
+    echo ERROR: yt-dlp.exe was still not found after running install_tools.ps1.
+    echo Build stopped.
+    pause
+    exit /b 1
+)
+
+if not exist "%~dp0tools\ffmpeg.exe" (
+    echo.
+    echo ERROR: ffmpeg.exe was still not found after running install_tools.ps1.
+    echo Build stopped.
+    pause
+    exit /b 1
 )
 
 echo.

@@ -1,3 +1,7 @@
+param(
+    [switch]$NoPause
+)
+
 $ErrorActionPreference = "Stop"
 
 Write-Host "Installing local yt-dlp and ffmpeg into ./tools ..."
@@ -8,7 +12,6 @@ $ToolsDir = Join-Path $BaseDir "tools"
 $TempDir = Join-Path $BaseDir "_tmp_install"
 
 New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -28,14 +31,19 @@ if (Test-Path $YtDlpPath) {
 $FfmpegPath = Join-Path $ToolsDir "ffmpeg.exe"
 $FfprobePath = Join-Path $ToolsDir "ffprobe.exe"
 
-if (Test-Path $FfmpegPath) {
+$NeedsFfmpegInstall = -not (Test-Path $FfmpegPath) -or -not (Test-Path $FfprobePath)
+
+if (-not $NeedsFfmpegInstall) {
     Write-Host ""
-    Write-Host "ffmpeg already exists. Skipping download:"
+    Write-Host "ffmpeg and ffprobe already exist. Skipping download:"
     Write-Host "  $FfmpegPath"
+    Write-Host "  $FfprobePath"
 } else {
     $FfmpegZipUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
     $FfmpegZipPath = Join-Path $TempDir "ffmpeg.zip"
     $FfmpegExtractDir = Join-Path $TempDir "ffmpeg"
+
+    New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 
     Write-Host ""
     Write-Host "Downloading ffmpeg..."
@@ -62,9 +70,9 @@ if (Test-Path $FfmpegPath) {
     }
 }
 
-Write-Host ""
-Write-Host "Cleaning temporary files..."
 if (Test-Path $TempDir) {
+    Write-Host ""
+    Write-Host "Cleaning temporary files..."
     Remove-Item $TempDir -Recurse -Force
 }
 
@@ -104,4 +112,6 @@ Write-Host "  $YtDlpPath"
 Write-Host "  $FfmpegPath"
 Write-Host ""
 Write-Host "You can now run LiveCatch.exe or run_app.bat."
-pause
+if (-not $NoPause) {
+    pause
+}

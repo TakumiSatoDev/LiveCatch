@@ -117,9 +117,11 @@ class LiveCatchApp(tk.Tk):
         if last_quality not in QUALITY_PRESETS:
             last_quality = DEFAULT_QUALITY_LABEL
         self.quality_preset_var = tk.StringVar(value=last_quality)
-        self.concurrent_fragments_var = tk.StringVar(
-            value=str(self.config_data.get("concurrent_fragments", DEFAULT_CONCURRENT_FRAGMENTS))
-        )
+
+        last_concurrent_fragments = str(self.config_data.get("concurrent_fragments", DEFAULT_CONCURRENT_FRAGMENTS))
+        if last_concurrent_fragments not in SPEED_PRESETS:
+            last_concurrent_fragments = str(DEFAULT_CONCURRENT_FRAGMENTS)
+        self.concurrent_fragments_var = tk.StringVar(value=last_concurrent_fragments)
 
         self.output_template_var = tk.StringVar(
             value=self.config_data.get(
@@ -501,10 +503,10 @@ class LiveCatchApp(tk.Tk):
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
 
-        t = threading.Thread(target=self._run_process, args=(cmd,), daemon=True)
+        t = threading.Thread(target=self._run_process, args=(cmd, mode), daemon=True)
         t.start()
 
-    def _run_process(self, cmd):
+    def _run_process(self, cmd, mode):
         try:
             creationflags = 0
             if os.name == "nt":
@@ -523,7 +525,7 @@ class LiveCatchApp(tk.Tk):
 
             assert self.proc.stdout is not None
             for line in self.proc.stdout:
-                self._maybe_stop_when_caught_up(line)
+                self._maybe_stop_when_caught_up(line, mode)
                 if self._should_display_log(line):
                     self.log_queue.put(line)
 
@@ -546,8 +548,8 @@ class LiveCatchApp(tk.Tk):
             self.last_download_log_at = now
         return True
 
-    def _maybe_stop_when_caught_up(self, line):
-        if self.mode_var.get() != MODE_CATCHUP_STOP:
+    def _maybe_stop_when_caught_up(self, line, mode):
+        if mode != MODE_CATCHUP_STOP:
             return
         if self.catchup_stop_sent:
             return
