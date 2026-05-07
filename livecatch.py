@@ -620,18 +620,18 @@ class LiveCatchApp(tk.Tk):
         self.menu_bar = tk.Menu(self)
         self.language_menu = tk.Menu(self.menu_bar, tearoff=False)
         self.language_menu.add_radiobutton(
-            label="日本語",
+            label=self._t("menu_lang_ja"),
             variable=self.language_var,
             value=LANG_JA,
             command=self._on_language_changed,
         )
         self.language_menu.add_radiobutton(
-            label="English",
+            label=self._t("menu_lang_en"),
             variable=self.language_var,
             value=LANG_EN,
             command=self._on_language_changed,
         )
-        self.menu_bar.add_cascade(label="言語", menu=self.language_menu)
+        self.menu_bar.add_cascade(label=self._t("menu_language"), menu=self.language_menu)
         self.configure(menu=self.menu_bar)
 
     def _row(self, parent, row, label, var, width=60):
@@ -651,9 +651,7 @@ class LiveCatchApp(tk.Tk):
         self._apply_language()
 
     def _apply_language(self):
-        self.menu_bar.entryconfigure(0, label=self._t("menu_language"))
-        self.language_menu.entryconfigure(0, label=self._t("menu_lang_ja"))
-        self.language_menu.entryconfigure(1, label=self._t("menu_lang_en"))
+        self._build_menu()
 
         self.mode_frame.configure(text=self._t("mode_frame"))
         self.mode_reservation_radio.configure(text=self._t("mode_reservation_radio"))
