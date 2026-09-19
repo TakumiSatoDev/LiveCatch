@@ -1,76 +1,21 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-
-echo ================================
-echo LiveCatch v2.1.3 Build Script
-echo ================================
-echo.
-
-set "TOOLS_MISSING=0"
-
-if not exist "%~dp0tools\yt-dlp.exe" (
-    echo tools\yt-dlp.exe was not found.
-    set "TOOLS_MISSING=1"
+echo LiveCatch v3 development build. Use the same Python environment as run_app.bat.
+python -m pip install -r requirements-dev.txt
+if errorlevel 1 exit /b 1
+python -m pytest -q
+if errorlevel 1 exit /b 1
+python -m PyInstaller --noconfirm --clean --onefile --console --name LiveCatchWorker --collect-all yt_dlp --collect-all yt_dlp_ejs livecatch_worker.py
+if errorlevel 1 exit /b 1
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name LiveCatch --collect-all yt_dlp --collect-all yt_dlp_ejs livecatch.py
+if errorlevel 1 exit /b 1
+if not exist dist\tools mkdir dist\tools
+for %%F in (ffmpeg.exe ffprobe.exe deno.exe) do (
+    if exist tools\%%F copy /Y tools\%%F dist\tools\%%F >nul
 )
-
-if not exist "%~dp0tools\ffmpeg.exe" (
-    echo tools\ffmpeg.exe was not found.
-    set "TOOLS_MISSING=1"
-)
-
-if "%TOOLS_MISSING%"=="1" (
-    echo Running install_tools.ps1 first...
-    echo.
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_tools.ps1" -NoPause
-)
-
-if not exist "%~dp0tools\yt-dlp.exe" (
-    echo.
-    echo ERROR: yt-dlp.exe was still not found after running install_tools.ps1.
-    echo Build stopped.
-    pause
-    exit /b 1
-)
-
-if not exist "%~dp0tools\ffmpeg.exe" (
-    echo.
-    echo ERROR: ffmpeg.exe was still not found after running install_tools.ps1.
-    echo Build stopped.
-    pause
-    exit /b 1
-)
-
-echo.
-echo Installing PyInstaller...
-python -m pip install --upgrade pip
-python -m pip install pyinstaller
-
-echo.
-echo Building LiveCatch.exe...
-pyinstaller --clean --onefile --windowed --name LiveCatch livecatch.py
-
-echo.
-echo Copying tools to dist\tools...
-
-if not exist "%~dp0dist\tools" mkdir "%~dp0dist\tools"
-
-copy /Y "%~dp0tools\yt-dlp.exe" "%~dp0dist\tools\yt-dlp.exe"
-copy /Y "%~dp0tools\ffmpeg.exe" "%~dp0dist\tools\ffmpeg.exe"
-
-if exist "%~dp0tools\ffprobe.exe" (
-    copy /Y "%~dp0tools\ffprobe.exe" "%~dp0dist\tools\ffprobe.exe"
-)
-
-echo.
-echo ================================
-echo Build complete.
-echo ================================
-echo EXE:
-echo   %~dp0dist\LiveCatch.exe
-echo.
-echo Tools:
-echo   %~dp0dist\tools
-echo.
-pause
+echo Keep LiveCatch.exe, LiveCatchWorker.exe and tools together.
+echo ffmpeg AND ffprobe are required. Deno is recommended for YouTube.
+echo CUDA requires a suitable FFmpeg build and NVIDIA driver; run Tools / GPU check.
+echo Build is not a GPU or real-stream validation. See docs/VALIDATION.md.
 endlocal
