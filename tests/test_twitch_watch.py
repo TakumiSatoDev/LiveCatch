@@ -84,7 +84,7 @@ def test_recording_settings_unique_and_not_vod():
     a = channel_settings(base, 'foo', '12345')
     b = channel_settings(base, 'foo', '12345')
     assert a.mode == 'reservation' and a.live_from_start is False
-    assert a.gpu_export == 'cuda' and a.gpu_preset == 'max_speed'
+    assert a.gpu_export == 'off' and a.gpu_preset == 'max_speed'
     assert a.save_dir == base.save_dir and a.use_temp_dir
     assert a.output_template.startswith('Twitch/foo/12345_')
     assert a.output_template != b.output_template
@@ -394,6 +394,21 @@ def test_factory_failure_counts_towards_recording_attempt_limit():
         h.tick(60)
         if s.probe: h.live()
     assert s.attempts == 3 and s.recording is None and s.status == 'retry_limit'
+
+
+def test_recording_progress_tracks_phase_fragments_and_speed():
+    h=Harness();s=h.live();w=s.recording.worker
+    w.events.put({'event':'phase','name':'downloading'})
+    w.events.put({'event':'progress','stream':'video','percent':42.5,
+                  'fragment_index':85,'fragment_count':200,'speed':8*1024*1024})
+    w.events.put({'event':'fragment','stream':'audio','current':40,'total':100,'bytes':4096})
+    h.tick()
+    assert s.status=='recording' and s.phase=='downloading'
+    assert s.progress['video']['percent']==42.5
+    assert s.progress['video']['fragment_index']==85
+    assert s.progress['audio']['percent']==40.0
+    w.events.put({'event':'phase','name':'postprocessing'});h.tick()
+    assert s.status=='postprocessing'
 
 
 def test_live_addition_is_checked_immediately_and_elapsed_is_kept():
