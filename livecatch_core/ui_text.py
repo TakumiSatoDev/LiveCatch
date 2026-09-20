@@ -9,7 +9,8 @@ import sys
 # Typical UTF-8-as-CP932 mojibake markers. Keep this source ASCII-only so the
 # repair path itself cannot be corrupted by a locale-sensitive build step.
 _MOJIBAKE_MARKERS = tuple(
-    "\u7e3a\u7e67\u8b41\u9035\u9a65\u9b2e\u7e5d\u7e5f\u87c4\u8700\u8373"
+    "\u7e3a\u7e67\u7e5d\u9aad\u9015\u96a7\u908f\u879f\u92e4"
+    "\u95be\u870d\u9e78\u9b2e\u95d5\u96c9\u873f"
 )
 
 
@@ -17,7 +18,8 @@ def repair_mojibake(value: str) -> str:
     """Undo the common UTF-8 bytes decoded as CP932 failure when detectable."""
     if not isinstance(value, str) or not value:
         return value
-    if not any(marker in value for marker in _MOJIBAKE_MARKERS):
+    has_halfwidth = any("\uff61" <= ch <= "\uff9f" for ch in value)
+    if not has_halfwidth and not any(marker in value for marker in _MOJIBAKE_MARKERS):
         return value
     try:
         fixed = value.encode("cp932").decode("utf-8")
