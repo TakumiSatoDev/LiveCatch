@@ -134,6 +134,9 @@ class TwitchWatchApp(LiveCatchApp):
                                (("監視だけ停止", "Pause monitoring only"), self.watch_manager.stop),
                                (("監視・全自動録画停止", "Stop monitoring and all auto-recordings"), self.watch_manager.shutdown)):
             ttk.Button(actions, text=self._t(*title), command=command).pack(side="left", padx=(0, 4))
+        self.watch_open_folder_button = ttk.Button(
+            actions, text=self._t("保存先を開く", "Open folder"), command=self._open_folder)
+        self.watch_open_folder_button.pack(side="left", padx=(4, 0))
         self.watch_summary = tk.StringVar()
         ttk.Label(frame, textvariable=self.watch_summary).pack(anchor="w", pady=3)
         self.watch_detail = tk.StringVar()
