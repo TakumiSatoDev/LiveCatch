@@ -76,7 +76,7 @@ class WatchConfig:
     interval: int = 60
     max_recordings: int = 3
     autostart: bool = False
-    monitor_preset: str = "manual"
+    monitor_preset: str = "fast"
     catchup_mode: str = "from_start"
     schema_version: int = 1
 
