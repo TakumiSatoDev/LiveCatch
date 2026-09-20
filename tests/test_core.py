@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import shutil
 import zipfile
+from types import SimpleNamespace
 import pytest
 
 from livecatch_core.config import ConfigStore, Settings, DEFAULT_TEMPLATE, normalize_url
@@ -195,7 +196,9 @@ def test_updater_retries_windows_sharing_violation(monkeypatch, tmp_path):
             raise error
         original_install(source, destination)
 
-    monkeypatch.setattr(livecatch_updater.os, "name", "nt")
+    real_os = livecatch_updater.os
+    fake_os = SimpleNamespace(name="nt", replace=real_os.replace)
+    monkeypatch.setattr(livecatch_updater, "os", fake_os)
     monkeypatch.setattr(livecatch_updater.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(livecatch_updater, "_install", flaky_install)
     _install_with_retry(payload, target, timeout=1)
