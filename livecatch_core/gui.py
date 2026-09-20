@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import webbrowser
 from threading import Thread
+from time import monotonic
 
 from . import __version__
 from .config import BROWSERS, QUALITY, ConfigStore, Settings
@@ -19,6 +20,7 @@ from .options import ydl_options
 from .supervisor import Supervisor
 from .tools import find_tool
 from .updates import UpdateCheck, check_for_update, download_update
+from .ui_text import configure_tk_utf8, configure_windows_utf8, format_elapsed, repair_mojibake
 
 UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
@@ -67,7 +69,9 @@ CHOICES = {"mode": ("reservation", "live_full", "catchup_stop"), "browser": BROW
 
 class LiveCatchApp(tk.Tk):
     def __init__(self, store: ConfigStore | None = None, update_checker=check_for_update):
+        configure_windows_utf8()
         super().__init__()
+        configure_tk_utf8(self)
         self.title(f"LiveCatch {__version__}")
         self.geometry("1040x820")
         self.minsize(840, 680)
@@ -84,6 +88,7 @@ class LiveCatchApp(tk.Tk):
         self._progress = {
             "phase": "starting", "active": False, "streams": {}, "detail": "",
             "export_current": 0, "export_total": 0, "outputs": 0,
+            "started_at": None, "elapsed": None,
         }
         self._update_checker = update_checker
         self._update_info: UpdateCheck | None = None
@@ -96,7 +101,8 @@ class LiveCatchApp(tk.Tk):
         self.after(UPDATE_CHECK_INTERVAL_MS, self._scheduled_update_check)
 
     def _t(self, ja, en):
-        return en if self.vars["language"].get() == "en" else ja
+        value = en if self.vars["language"].get() == "en" else ja
+        return repair_mojibake(value)
 
     def _build(self):
         self.body = ttk.Frame(self, padding=14)
@@ -232,6 +238,8 @@ class LiveCatchApp(tk.Tk):
             self._reset_progress()
             self.supervisor.start(settings)
             self._progress["active"] = True
+            self._progress["started_at"] = monotonic()
+            self._progress["elapsed"] = None
             self._render_progress()
             self.start_button.configure(state="disabled")
         except Exception as exc:
@@ -419,6 +427,7 @@ class LiveCatchApp(tk.Tk):
         self._progress = {
             "phase": "starting", "active": False, "streams": {}, "detail": "",
             "last_phase": "starting", "export_current": 0, "export_total": 0, "outputs": 0,
+            "started_at": None, "elapsed": None,
         }
         self._render_progress()
 
@@ -467,6 +476,9 @@ class LiveCatchApp(tk.Tk):
                 f"変換済み: {event.get('path', '')}",
                 f"Exported: {event.get('path', '')}")
         elif kind == "done":
+            started_at = self._progress.get("started_at")
+            if isinstance(started_at, (int, float)):
+                self._progress["elapsed"] = max(0.0, monotonic() - started_at)
             self._progress["active"] = False
             self._progress["phase"] = "done" if event.get("status") == "completed" else event.get("status", "failed")
             self._progress["detail"] = self._t(
@@ -546,6 +558,15 @@ class LiveCatchApp(tk.Tk):
 
     def _progress_summary(self) -> str:
         parts = []
+        elapsed = self._progress.get("elapsed")
+        started_at = self._progress.get("started_at")
+        if self._progress.get("active") and isinstance(started_at, (int, float)):
+            elapsed = max(0.0, monotonic() - started_at)
+        if isinstance(elapsed, (int, float)):
+            parts.append(self._t(
+                ("経過 " if self._progress.get("active") else "所要時間 ") + format_elapsed(elapsed),
+                ("Elapsed " if self._progress.get("active") else "Duration ") + format_elapsed(elapsed),
+            ))
         for stream, state in sorted(self._progress.get("streams", {}).items()):
             label = str(stream)
             percent = state.get("percent")
@@ -583,6 +604,8 @@ class LiveCatchApp(tk.Tk):
                 log_events.append(event)
         if log_events:
             self._log("\n".join(e.get("message") or json.dumps(e, ensure_ascii=False) for e in log_events))
+        if self._progress.get("active"):
+            self._render_progress()
         self.after(100, self._poll)
 
     def _log(self, text):
