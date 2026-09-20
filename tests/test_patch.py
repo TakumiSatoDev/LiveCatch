@@ -37,6 +37,23 @@ def test_patch_calls_real_contract_path_and_restores():
     assert [data['current'] for kind,data in events if kind=='fragment']==list(range(10))
     assert FragmentContract.download_and_append_fragments is original and FragmentContract._append_fragment is append
 
+def test_catchup_progress_normalizes_truncated_live_sequence():
+    fd=FragmentContract();events=[]
+    fragments=[
+        {'frag_index':i+1,'fragment_count':105,'url':f'https://media.invalid/x?sq={100+i}'}
+        for i in range(6)
+    ]
+    info={'is_live':True,'is_from_start':True}
+    with _patch_class(
+            FragmentContract,Event(),prefetch=2,snapshot=False,catchup=True,
+            emit=lambda kind,**data:events.append((kind,data))):
+        assert fd.download_and_append_fragments({'filename':'a'},fragments,info,tpe=object())
+    catchup=[data for kind,data in events if kind=='catchup']
+    assert round(catchup[0]['percent'],1)==16.7
+    assert catchup[-1]['percent']==100.0
+    assert catchup[-1]['gap_fragments']==0 and catchup[-1]['caught_up'] is True
+
+
 def test_patch_snapshot_both_streams():
     fd=FragmentContract();info={'is_live':True,'extractor_key':'Youtube','protocol':'http_dash_segments_generator'}
     with _patch_class(FragmentContract,Event(),prefetch=2,snapshot=True,emit=lambda *a,**k:None):
