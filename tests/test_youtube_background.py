@@ -13,7 +13,11 @@ from livecatch_core.background import BackgroundConfig, BackgroundStore, Instanc
 from livecatch_core.channels import broadcast_key, manual_target, normalize_target, parse_targets, target_url, valid_broadcast_id, youtube_target
 from livecatch_core.config import Settings
 from livecatch_core.events import EventBuffer
-from livecatch_core.twitch_watch import WatchChannel, WatchConfig, WatchManager, WatchStore, channel_settings, new_worker
+from livecatch_core.twitch_watch import (
+    WatchChannel, WatchConfig, WatchManager, WatchStore, apply_monitor_preset,
+    channel_settings, new_worker,
+)
+from livecatch_core.ui_text import format_elapsed, repair_mojibake
 from livecatch_core.youtube_watch_probe import resolve_live
 
 CHANNEL='UC'+'AbCd_1'*3+'ABCD'
@@ -57,12 +61,34 @@ def test_watch_store_keeps_twitch_and_unknown_fields(tmp_path):
     assert json.loads(store.path.read_text())['keep']==42
 
 
+def test_monitor_presets_are_separate_from_manual_settings():
+    base=Settings(concurrent_fragments=8,prefetch=2,gpu_jobs=1,gpu_preset='balanced')
+    fast=apply_monitor_preset(base,'fast')
+    extreme=apply_monitor_preset(base,'extreme')
+    maximum=apply_monitor_preset(base,'max')
+    assert (base.concurrent_fragments,base.prefetch,base.gpu_jobs)==(8,2,1)
+    assert (fast.concurrent_fragments,fast.prefetch,fast.gpu_jobs,fast.gpu_preset)==(64,4,3,'fast')
+    assert (extreme.concurrent_fragments,extreme.prefetch,extreme.gpu_jobs)==(96,6,4)
+    assert (maximum.concurrent_fragments,maximum.prefetch,maximum.gpu_jobs,maximum.gpu_preset)==(128,8,6,'max_speed')
+    assert apply_monitor_preset(base,'manual')==base
+
+
+def test_ui_mojibake_repair_and_elapsed_format():
+    broken='録画'.encode('utf-8').decode('cp932')
+    assert repair_mojibake(broken)=='録画'
+    assert repair_mojibake('録画')=='録画'
+    assert format_elapsed(0)=='00:00'
+    assert format_elapsed(65)=='01:05'
+    assert format_elapsed(3661)=='1:01:01'
+
+
 def test_youtube_settings_and_worker_routing():
     s=channel_settings(Settings(),'youtube:@example',VIDEO)
     s.validate()
     assert s.url.endswith('watch?v='+VIDEO) and not s.live_from_start
     assert s.output_template.startswith('YouTube/%(channel_id)s/'+VIDEO)
     assert channel_settings(Settings(),'youtube:@example',VIDEO).output_template != s.output_template
+    assert channel_settings(Settings(),'youtube:@example',VIDEO,catchup=True).live_from_start is True
     assert channel_settings(Settings(),'youtube:@example').url.endswith('/@example/live')
     assert new_worker('youtube_probe').command[-1]=='--youtube-probe'
     assert new_worker('youtube_record',VIDEO).command[-2:]==['--youtube-watch-record',VIDEO]
