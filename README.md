@@ -45,7 +45,7 @@ HTTP取得・再試行・復号・resume・結合は上流に任せ、先読み�
 `site-packages` や上流リポジトリのファイルは書き換えません。終了時にメソッドも元に戻します。
 
 * ライブfragment生成器を別スレッドで進め、未来のfragment待ちが既取得分の保存を塞がない構造。
-* 完了済み未保存分も含む先読み上限。初期値8並列×2、HTTP並列数は1〜32まで。
+* 完了済み未保存分も含む先読み上限。初期値8並列×2。通常域は1〜32並列、実験用に最大128並列・prefetch倍率8まで選択可能。
 * 保存順は元の順序。resume checkpointも保存するfragment番号に固定。
 * 取得不可fragmentは黙って飛ばさず失敗。再試行回数・待ち時間は上限付き。
 
@@ -68,12 +68,21 @@ HTTP取得・再試行・復号・resume・結合は上流に任せ、先読み�
 | `cpu` | `libx264` によるCPU変換。 |
 
 NVDEC/NVENCは専用動画エンジン、CUDAはここでは拡縮処理です。独自CUDAカーネルを実装したわけではありません。
-最大4ファイルを並列変換できます。1つの動画を時間分割して並列再結合する方式ではありません。
+最大8ファイルを並列変換できます。1つの動画を時間分割して並列再結合する方式ではありません。
+NVENC速度プリセットは balanced=p4 / fast=p2 / max_speed=p1 を選択できます。
 GPUセッション数／VRAM／ディスクの上限があるため、同時数を増やせば必ず速くなるとは限りません。
 
 ```powershell
-python -m livecatch_core export "recording1.mkv" "recording2.mkv" --mode cuda --height 720 --jobs 2
+python -m livecatch_core export "recording1.mkv" "recording2.mkv" --mode cuda --height 720 --jobs 2 --preset fast
 ```
+
+### 実験的な高負荷設定
+
+高速回線・NVMe・十分なCPU/GPU余力がある環境向けに、GUIから `64 / 96 / 128` fragment並列、
+prefetch倍率 `5〜8`、GPU変換 `5〜8` ジョブ、NVENC `max_speed (p1)` を選べます。
+これらは速度保証ではありません。CDNや配信サービス側の制限、429、ソケット数、CPU、NVMe、
+アンチウイルス、VRAM/NVENCセッション上限が先に詰まると、32並列以下より遅くなることがあります。
+高負荷域では開始前に確認ダイアログを表示します。
 
 入力ファイルは上書きしません。出力も既存ファイルを上書きしません。MP4変換は**非可逆圧縮**です。
 HDRは明示的なトーンマッピングが未実装のため拒否します。
