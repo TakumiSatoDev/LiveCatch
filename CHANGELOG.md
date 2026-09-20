@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.4.1
+
+### Added
+
+- The automatic-recording tab now has its own `Open folder` action so the save directory remains accessible while manual recording controls are hidden.
+
 ## v3.4.0
 
 ### Added
