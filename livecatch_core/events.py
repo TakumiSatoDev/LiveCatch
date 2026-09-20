@@ -23,7 +23,7 @@ class Emitter:
 
     def __call__(self, kind: str, **data) -> None:
         with self.lock:
-            if kind in ("progress", "fragment"):
+            if kind in ("progress", "fragment", "catchup"):
                 key = (kind, data.get("stream"))
                 now = monotonic()
                 if now - self.last.get(key, -1) < 0.25:
