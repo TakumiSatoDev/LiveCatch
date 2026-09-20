@@ -11,7 +11,7 @@ from .background import InstanceLease
 from .config import ConfigStore, CONFIG_FILE
 from .events import Emitter
 from .tools import find_tool
-from .twitch_watch import WatchManager, WatchStore, WATCH_FILE
+from .twitch_watch import WatchManager, WatchStore, WATCH_FILE, apply_monitor_preset
 
 
 def main(argv=None):
@@ -26,7 +26,8 @@ def main(argv=None):
     previous = {}
     lease = InstanceLease()
     try:
-        settings, config = ConfigStore(args.config).load(), WatchStore(args.watch_config).load()
+        base_settings, config = ConfigStore(args.config).load(), WatchStore(args.watch_config).load()
+        settings = apply_monitor_preset(base_settings, config.monitor_preset)
         if not find_tool("ffmpeg") or not find_tool("ffprobe"):
             raise ValueError("ffmpeg and ffprobe are required")
         extreme = (settings.concurrent_fragments > 32 or settings.prefetch > 4
