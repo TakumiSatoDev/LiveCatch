@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.1.1
+
+### Fixed
+
+- The in-app updater now retries Windows sharing violations while the old GUI, recording worker, or bundled tools finish releasing file handles.
+- Updates still fail safely after a bounded timeout instead of overwriting files while a process is using them.
+
 ## v3.1.0
 
 ### Added

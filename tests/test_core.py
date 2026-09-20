@@ -11,7 +11,8 @@ from livecatch_core.events import Emitter, EventBuffer, redact
 from livecatch_core.options import ydl_options
 from livecatch_core.updates import UpdateCheck, check_for_update, download_update, is_newer
 from livecatch_core.ytdlp_patch import require_supported_version
-from livecatch_updater import _install
+import livecatch_updater
+from livecatch_updater import _install, _install_with_retry
 
 @pytest.mark.parametrize('url', ['youtube.com/watch?v=abc','https://www.youtube.com/live/abc','https://youtu.be/abc','https://twitch.tv/example'])
 def test_urls(url):
@@ -172,3 +173,31 @@ def test_updater_replaces_installed_files(tmp_path):
     _install(payload, target)
     assert (target / "LiveCatch.exe").read_bytes() == b"new"
     assert (target / "tools" / "ffmpeg.exe").read_bytes() == b"new-tool"
+
+
+def test_updater_retries_windows_sharing_violation(monkeypatch, tmp_path):
+    target = tmp_path / "installed"
+    payload = tmp_path / "payload"
+    target.mkdir()
+    payload.mkdir()
+    (target / "LiveCatch.exe").write_bytes(b"old")
+    (payload / "LiveCatch.exe").write_bytes(b"new")
+    (payload / "LiveCatchWorker.exe").write_bytes(b"worker")
+
+    attempts = []
+    original_install = livecatch_updater._install
+
+    def flaky_install(source, destination):
+        attempts.append(1)
+        if len(attempts) < 3:
+            error = PermissionError(32, "sharing violation")
+            error.winerror = 32
+            raise error
+        original_install(source, destination)
+
+    monkeypatch.setattr(livecatch_updater.os, "name", "nt")
+    monkeypatch.setattr(livecatch_updater.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(livecatch_updater, "_install", flaky_install)
+    _install_with_retry(payload, target, timeout=1)
+    assert len(attempts) == 3
+    assert (target / "LiveCatch.exe").read_bytes() == b"new"
