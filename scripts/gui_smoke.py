@@ -13,6 +13,21 @@ with tempfile.TemporaryDirectory() as directory:
         assert app.notebook.tab(app.record_tab,'text')=='録画'
         assert app.notebook.tab(app.settings_tab,'text')=='設定'
         assert str(app.start_button.cget('text'))=='開始'
+        app._reset_progress(); app._progress['active']=True
+        app._handle_progress_event({'event':'phase','name':'extracting'})
+        assert '100%' in str(app.phase_steps['starting'].cget('text'))
+        assert '…' in str(app.phase_steps['extracting'].cget('text'))
+        app._handle_progress_event({'event':'phase','name':'downloading'})
+        app._handle_progress_event({'event':'progress','stream':'video','percent':42.5,
+                                    'fragment_index':42,'fragment_count':100})
+        assert '42%' in str(app.phase_steps['downloading'].cget('text'))
+        app._handle_progress_event({'event':'streams','count':1})
+        app._handle_progress_event({'event':'catchup','stream':'video','percent':60.0,
+                                    'current':60,'total':100,'gap_fragments':40,'caught_up':False})
+        assert '60%' in app.phase_var.get() and '追いつき' in app.phase_var.get()
+        app._handle_progress_event({'event':'catchup','stream':'video','percent':100.0,
+                                    'current':100,'total':100,'gap_fragments':0,'caught_up':True})
+        assert 'LIVE' in app.phase_var.get()
         app.vars['language'].set('en');app._rebuild();app.update()
         app.notebook.select(app.settings_tab);app.update()
         assert app.settings().language=='en'
