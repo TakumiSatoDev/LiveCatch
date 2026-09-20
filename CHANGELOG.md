@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.0.3
+
+### Added
+
+- In-app update button with periodic update checks.
+- Self-update package and helper that replace the installed executables and restart LiveCatch without opening a browser or installer wizard.
+
 ## v3.0.2
 
 ### Fixed

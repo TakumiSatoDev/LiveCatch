@@ -32,6 +32,9 @@ if ($LASTEXITCODE -ne 0) { throw "LiveCatchWorker build failed." }
 & $Python -m PyInstaller --noconfirm --clean --onefile --windowed --name LiveCatch `
     --collect-all yt_dlp --collect-all yt_dlp_ejs livecatch.py
 if ($LASTEXITCODE -ne 0) { throw "LiveCatch GUI build failed." }
+& $Python -m PyInstaller --noconfirm --clean --onefile --windowed --name LiveCatchUpdater `
+    livecatch_updater.py
+if ($LASTEXITCODE -ne 0) { throw "LiveCatch updater build failed." }
 
 $DistTools = Join-Path $Root "dist\tools"
 New-Item -ItemType Directory -Force -Path $DistTools | Out-Null
@@ -42,6 +45,23 @@ foreach ($Tool in @("ffmpeg.exe", "ffprobe.exe", "deno.exe")) {
     }
     Copy-Item $Source -Destination (Join-Path $DistTools $Tool) -Force
 }
+
+$UpdateStage = Join-Path $Root "dist\update"
+if (Test-Path $UpdateStage) {
+    Remove-Item $UpdateStage -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $UpdateStage "tools") | Out-Null
+foreach ($File in @("LiveCatch.exe", "LiveCatchWorker.exe", "LiveCatchUpdater.exe")) {
+    Copy-Item (Join-Path $Root "dist\$File") -Destination (Join-Path $UpdateStage $File) -Force
+}
+Copy-Item (Join-Path $DistTools "*") -Destination (Join-Path $UpdateStage "tools") -Recurse -Force
+$ReleaseDir = Join-Path $Root "dist\installer"
+New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
+$UpdateZip = Join-Path $ReleaseDir "LiveCatch-Update-$Version.zip"
+if (Test-Path $UpdateZip) {
+    Remove-Item $UpdateZip -Force
+}
+Compress-Archive -Path (Join-Path $UpdateStage "*") -DestinationPath $UpdateZip -CompressionLevel Optimal
 
 $Iscc = Get-Command iscc.exe -ErrorAction SilentlyContinue
 if ($Iscc) {
