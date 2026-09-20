@@ -14,9 +14,14 @@ from .tools import find_tool
 
 
 def main():
+    if sys.argv[1:2] == ["watch"]:
+        from .headless import main as watch
+        return watch(sys.argv[2:])
     parser = argparse.ArgumentParser(prog="python -m livecatch_core")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("gui")
+    gui_parser = sub.add_parser("gui")
+    gui_parser.add_argument("--background", action="store_true")
+    sub.add_parser("watch", help="GUI-free monitoring; watch --help for options")
     diagnose = sub.add_parser("diagnose")
     diagnose.add_argument("--device", type=int, default=0)
     record = sub.add_parser("record")
@@ -32,9 +37,8 @@ def main():
     emit, cancel = Emitter(sys.stdout), Event()
     try:
         if args.command == "gui":
-            from .twitch_watch_gui import main as gui
-            gui()
-            return 0
+            from .desktop import main as gui
+            return gui(["--background"] if args.background else [])
         ffmpeg, ffprobe = find_tool("ffmpeg"), find_tool("ffprobe")
         if args.command == "diagnose":
             from importlib.metadata import PackageNotFoundError, version

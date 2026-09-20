@@ -30,7 +30,7 @@ if (Test-Path (Join-Path $Root "dist")) {
     --collect-all yt_dlp --collect-all yt_dlp_ejs livecatch_worker.py
 if ($LASTEXITCODE -ne 0) { throw "LiveCatchWorker build failed." }
 & $Python -m PyInstaller --noconfirm --clean --onefile --windowed --name LiveCatch `
-    --collect-all yt_dlp --collect-all yt_dlp_ejs livecatch.py
+    --collect-all yt_dlp --collect-all yt_dlp_ejs --collect-all pystray --hidden-import pystray._win32 --collect-all PIL livecatch.py
 if ($LASTEXITCODE -ne 0) { throw "LiveCatch GUI build failed." }
 
 $DistTools = Join-Path $Root "dist\tools"

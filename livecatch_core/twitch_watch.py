@@ -1,10 +1,11 @@
-"""Persistent Twitch watch list and main-thread-owned recording scheduler.
+"""Persistent YouTube/Twitch watch list and main-thread-owned recording scheduler.
 
 Network checks run in bounded, killable worker processes, never in Tk callbacks.
 A fresh Supervisor owns every probe/recording; old results cannot own a new job.
 """
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
@@ -18,6 +19,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from .channels import broadcast_key, is_youtube, normalize_target, target_url, valid_broadcast_id
 from .config import Settings
 from .events import EventBuffer, redact
 from .supervisor import Supervisor
@@ -83,7 +85,7 @@ class WatchConfig:
         for channel in self.channels:
             if not isinstance(channel, WatchChannel) or type(channel.enabled) is not bool:
                 raise ValueError("Invalid watch channel")
-            if normalize_channel(channel.login) != channel.login or channel.login in seen:
+            if normalize_target(channel.login) != channel.login or channel.login in seen:
                 raise ValueError("Channel names must be normalized and unique")
             seen.add(channel.login)
 
@@ -95,7 +97,7 @@ class WatchConfig:
         for item in data.get("channels", []):
             if not isinstance(item, dict):
                 raise ValueError("Invalid watch channel")
-            channels.append(WatchChannel(normalize_channel(item.get("login")), item.get("enabled", True)))
+            channels.append(WatchChannel(normalize_target(item.get("login")), item.get("enabled", True)))
         result = cls(tuple(channels), data.get("interval", 60), data.get("max_recordings", 3),
                      data.get("autostart", False), data.get("schema_version", 1))
         result.validate()
@@ -130,20 +132,27 @@ class WatchStore:
 
 
 def channel_settings(base: Settings, login: str, stream_id: str | None = None) -> Settings:
-    login = normalize_channel(login)
-    settings = replace(base, url=f"https://www.twitch.tv/{login}", mode="reservation", live_from_start=False)
+    login = normalize_target(login)
+    settings = replace(base, url=target_url(login), mode="reservation", live_from_start=False)
     if stream_id is not None:
-        if not re.fullmatch(r"[0-9]{1,32}", stream_id):
-            raise ValueError("Missing/invalid Twitch broadcast ID")
+        if not valid_broadcast_id(login, stream_id):
+            raise ValueError("Missing/invalid broadcast ID")
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         template = f"Twitch/{login}/{stream_id}_{stamp}_{uuid4().hex[:12]}/%(title)s.%(ext)s"
+        if is_youtube(login):
+            template = f"YouTube/%(channel_id)s/{stream_id}_{stamp}_{uuid4().hex[:12]}/%(title)s.%(ext)s"
+            settings = replace(settings, url=f"https://www.youtube.com/watch?v={stream_id}")
         settings = replace(settings, output_template=template)
     return settings
 
 
 def new_worker(kind: str, stream_id: str | None = None) -> Supervisor:
     worker = Supervisor()
-    worker.command += ["--twitch-probe"] if kind == "probe" else ["--twitch-watch-record", str(stream_id)]
+    flags = {"probe": ["--twitch-probe"], "record": ["--twitch-watch-record", str(stream_id)],
+             "youtube_probe": ["--youtube-probe"], "youtube_record": ["--youtube-watch-record", str(stream_id)]}
+    if kind not in flags:
+        raise ValueError("Unknown worker kind")
+    worker.command += flags[kind]
     return worker
 
 
@@ -188,6 +197,7 @@ class WatchManager:
         self.states: dict[str, ChannelState] = {}
         self.running = False
         self.generation = 0
+        self.finished_broadcasts = deque(maxlen=1000)
 
     @property
     def recording_channels(self) -> set[str]:
@@ -212,7 +222,7 @@ class WatchManager:
         if self.running:
             return
         if not any(c.enabled for c in self.config.channels):
-            raise ValueError("Register and enable at least one Twitch channel")
+            raise ValueError("Register and enable at least one YouTube/Twitch channel")
         if any(s.probe is not None for s in self.states.values()):
             raise ValueError("Previous checks are still shutting down")
         self.running = True
@@ -225,7 +235,7 @@ class WatchManager:
                 s.status = "waiting" if c.enabled else "disabled"
 
     def _log(self, login: str, message: str) -> None:
-        self.events.put({"event": "watch_log", "message": f"[Twitch:{login}] {redact(message)[:1800]}"})
+        self.events.put({"event": "watch_log", "message": f"[Watch:{login}] {redact(message)[:1800]}"})
 
     def _kill(self, login: str, job: Job) -> None:
         if job.killer is not None and job.killer.is_alive():
@@ -252,6 +262,8 @@ class WatchManager:
     def stop_recording(self, login: str, *, force: bool = False) -> None:
         s = self.states[login]
         s.suppressed_id = s.stream_id
+        if s.stream_id:
+            self.finished_broadcasts.append(broadcast_key(login, s.stream_id))
         s.status = "stopping" if s.recording else "skipped"
         if s.recording:
             if force:
@@ -263,6 +275,8 @@ class WatchManager:
         s = self.states[login]
         if s.recording is not None:
             raise ValueError("Stop the current recording before retrying")
+        key = broadcast_key(login, s.stream_id)
+        self.finished_broadcasts = deque((x for x in self.finished_broadcasts if x != key), maxlen=1000)
         s.suppressed_id, s.attempts, s.retry_at = "", 0, 0.0
         s.online, s.next_check, s.status = False, self.clock(), "waiting"
 
@@ -299,7 +313,7 @@ class WatchManager:
         if not self._finished(job):
             if now - job.started >= PROBE_TIMEOUT and not job.discard:
                 job.discard = True
-                self._check_failed(s, now, "Twitch check timed out")
+                self._check_failed(s, now, "Live check timed out")
                 self._kill(login, job)
             return
         s.probe = None
@@ -307,13 +321,13 @@ class WatchManager:
             return
         s.checked = datetime.now().strftime("%H:%M:%S")
         if job.terminal.get("status") != "completed" or not isinstance(job.result, dict):
-            self._check_failed(s, now, job.error or "Twitch check failed (not treated as offline)")
+            self._check_failed(s, now, job.error or "Live check failed (not treated as offline)")
             return
         result = job.result
-        if result.get("status") == "offline":
+        if result.get("status") in ("offline", "upcoming"):
             s.online = False
-            s.status, s.detail = "offline", ""
-        elif result.get("status") == "live" and re.fullmatch(r"[0-9]{1,32}", str(result.get("stream_id", ""))):
+            s.status, s.detail = result["status"], ""
+        elif result.get("status") == "live" and valid_broadcast_id(login, result.get("stream_id", "")):
             stream_id = str(result["stream_id"])
             if stream_id != s.stream_id:
                 s.attempts, s.retry_at = 0, 0.0
@@ -321,7 +335,7 @@ class WatchManager:
             s.title, s.detail = str(result.get("title", ""))[:300], ""
             s.status = "live"
         else:
-            self._check_failed(s, now, "Invalid Twitch probe result")
+            self._check_failed(s, now, "Invalid live probe result")
             return
         s.check_errors = 0
         s.next_check = now + self.config.interval
@@ -346,6 +360,7 @@ class WatchManager:
         result = job.terminal.get("status", "failed")
         if result in ("completed", "cancelled", "forced") or s.suppressed_id == s.stream_id:
             s.suppressed_id = s.stream_id
+            self.finished_broadcasts.append(broadcast_key(login, s.stream_id))
             s.status = "completed" if result == "completed" else "skipped"
         else:
             s.retry_at = now + max(self.config.interval, min(60 * 2 ** max(0, s.attempts - 1), 900))
@@ -367,12 +382,16 @@ class WatchManager:
             if not c.enabled or s.recording is not None:
                 continue
             if s.online:
-                if s.stream_id == s.suppressed_id:
+                key = broadcast_key(c.login, s.stream_id)
+                if s.stream_id == s.suppressed_id or key in self.finished_broadcasts:
                     s.status = "skipped"
                 elif s.attempts >= MAX_ATTEMPTS:
                     s.status = "retry_limit"
-                elif c.login in manual:
+                elif c.login in manual or key in manual:
                     s.status = "manual"
+                elif any(broadcast_key(name, other.stream_id) == key
+                         for name, other in self.states.items() if other.recording is not None):
+                    s.status = "duplicate"
                 elif now < s.retry_at:
                     s.status = "retry_wait"
                 elif len(self.recording_channels) >= self.config.max_recordings:
@@ -380,7 +399,7 @@ class WatchManager:
                 elif now - s.observed <= self.config.interval:
                     try:
                         s.attempts += 1
-                        worker = self.factory("record", s.stream_id)
+                        worker = self.factory("youtube_record" if is_youtube(c.login) else "record", s.stream_id)
                         worker.start(channel_settings(self.settings, c.login, s.stream_id))
                         s.recording = Job(worker, now, self.generation)
                         s.status = "recording"
@@ -399,7 +418,7 @@ class WatchManager:
             if sum(x.probe is not None for x in self.states.values()) >= MAX_PROBES:
                 break
             try:
-                worker = self.factory("probe", None)
+                worker = self.factory("youtube_probe" if is_youtube(c.login) else "probe", None)
                 worker.start(channel_settings(self.settings, c.login))
                 s.probe = Job(worker, now, self.generation)
                 if not s.online:

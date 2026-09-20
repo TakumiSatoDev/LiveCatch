@@ -8,7 +8,7 @@ python -m pytest -q
 if errorlevel 1 exit /b 1
 python -m PyInstaller --noconfirm --clean --onefile --console --name LiveCatchWorker --collect-all yt_dlp --collect-all yt_dlp_ejs livecatch_worker.py
 if errorlevel 1 exit /b 1
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name LiveCatch --collect-all yt_dlp --collect-all yt_dlp_ejs livecatch.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name LiveCatch --collect-all yt_dlp --collect-all yt_dlp_ejs --collect-all pystray --hidden-import pystray._win32 --collect-all PIL livecatch.py
 if errorlevel 1 exit /b 1
 if not exist dist\tools mkdir dist\tools
 for %%F in (ffmpeg.exe ffprobe.exe deno.exe) do (

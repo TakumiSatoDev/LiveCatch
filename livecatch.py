@@ -1,5 +1,5 @@
-"""Compatibility entry point: python livecatch.py."""
-from livecatch_core.twitch_watch_gui import main
+"""Compatibility entry point: python livecatch.py [--background]."""
+from livecatch_core.desktop import main
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

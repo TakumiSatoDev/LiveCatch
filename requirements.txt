@@ -1,2 +1,5 @@
 # Private yt-dlp adapters are reviewed against this exact stable release.
 yt-dlp[default]==2026.8.19
+# Tray support is optional outside Windows; headless mode has no desktop dependency.
+pystray==0.19.5; sys_platform == "win32"
+Pillow>=11.3,<13; sys_platform == "win32"
