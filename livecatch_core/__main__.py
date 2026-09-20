@@ -27,6 +27,7 @@ def main():
     export.add_argument("--height", type=int, default=0)
     export.add_argument("--device", type=int, default=0)
     export.add_argument("--jobs", type=int, default=1)
+    export.add_argument("--preset", choices=("balanced", "fast", "max_speed"), default="balanced")
     args = parser.parse_args()
     emit, cancel = Emitter(sys.stdout), Event()
     try:
@@ -49,7 +50,7 @@ def main():
             return run(Settings.from_dict(json.loads(args.config.read_text(encoding="utf-8"))), cancel, emit)
         if not ffmpeg or not ffprobe:
             raise RuntimeError("ffmpeg and ffprobe are required")
-        export_batch(args.files, ExportOptions(args.mode, args.height, args.device, args.jobs),
+        export_batch(args.files, ExportOptions(args.mode, args.height, args.device, args.jobs, args.preset),
                      ffmpeg, ffprobe, cancel, emit)
         return 0
     except KeyboardInterrupt:
