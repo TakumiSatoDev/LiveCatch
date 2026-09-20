@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.1.2
+
+### Documentation
+
+- Added Windows UTF-8 / mojibake troubleshooting for source and packaged builds.
+- Added aggressive PC-spec-based fragment, prefetch, GPU export, and concurrent auto-recording recommendations.
+
 ## v3.1.1
 
 ### Fixed

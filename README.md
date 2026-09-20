@@ -178,7 +178,7 @@ Windowsのexeは `build_exe.bat` でGUIと専用ワーカーを別々に作り�
 ローカルで作成する場合は、Inno Setup 6をインストールしたうえで次を実行します。
 
 ```powershell
-.\build_release.bat 3.1.1
+.\build_release.bat 3.1.2
 ```
 
 インストーラーにはLiveCatch本体、録画ワーカー、FFmpeg、ffprobe、Deno、ライセンス通知を含めます。設定ファイルはユーザープロファイルに残るため、更新インストールで設定を削除しません。
