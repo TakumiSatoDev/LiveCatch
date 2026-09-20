@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.3.0
+
+### Added
+
+- Automatic-recording rows now show per-channel progress inside the current state, including percentage, fragment position and transfer speed when available.
+- Automatic-recording status now distinguishes preparation, stream extraction, downloading and mux/post-processing.
+
+### Changed
+
+- The manual recording action/progress panel is hidden while the YouTube / Twitch auto-record tab is selected; the shared log remains visible.
+- Desktop and automatic recordings are stream-copy focused: GPU/CPU post-record export controls were removed from the GUI and saved legacy GPU-export settings migrate to off.
+- Monitoring performance presets now control only fragment concurrency and prefetch. The optional standalone `livecatch_core export` CLI remains available for explicit transcoding.
+
 ## v3.2.1
 
 ### Changed
