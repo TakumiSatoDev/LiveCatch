@@ -38,18 +38,22 @@ LABELS = {
     "write_info_json": ("info.jsonを書き出す", "Write info.json"), "embed_metadata": ("メタデータを埋め込む", "Embed metadata"),
     "lightweight_catchup_postprocess": ("現在まで取得ではメタデータ省略", "Snapshot: skip metadata"),
     "quality_preset": ("画質", "Quality"), "output_format": ("保存形式", "Container"),
-    "concurrent_fragments": ("同時fragment数（1〜32）", "Fragment concurrency (1–32)"),
+    "concurrent_fragments": ("同時fragment数（1〜128）", "Fragment concurrency (1–128)"),
     "output_template": ("出力テンプレート", "Output template"), "engine": ("取得エンジン", "Download engine"),
     "prefetch": ("先読み上限＝並列数×倍率", "Prefetch window multiplier"),
     "gpu_export": ("取得後に別ファイルへ変換", "Separate export after recording"),
     "gpu_device": ("GPU番号", "GPU device"), "export_height": ("出力の高さ（0＝元サイズ）", "Export height (0 = original)"),
     "gpu_jobs": ("同時変換数", "Concurrent exports"),
+    "gpu_preset": ("NVENC速度プリセット", "NVENC speed preset"),
 }
 CHOICES = {"mode": ("reservation", "live_full", "catchup_stop"), "browser": BROWSERS,
            "quality_preset": tuple(QUALITY), "output_format": ("mp4", "mkv", "webm"),
            "engine": ("bounded", "stock"), "gpu_export": ("off", "auto", "cuda", "cpu"),
-           "concurrent_fragments": (1, 2, 4, 8, 16, 32), "prefetch": (1, 2, 3, 4),
-           "export_height": (0, 360, 480, 720, 1080, 1440, 2160), "gpu_jobs": (1, 2, 3, 4)}
+           "concurrent_fragments": (1, 2, 4, 8, 16, 32, 64, 96, 128),
+           "prefetch": (1, 2, 3, 4, 5, 6, 7, 8),
+           "export_height": (0, 360, 480, 720, 1080, 1440, 2160),
+           "gpu_jobs": (1, 2, 3, 4, 5, 6, 7, 8),
+           "gpu_preset": ("balanced", "fast", "max_speed")}
 
 
 class LiveCatchApp(tk.Tk):
@@ -104,7 +108,7 @@ class LiveCatchApp(tk.Tk):
             (("詳細", "Advanced"), ("use_temp_dir", "temp_dir", "output_template", "wait_seconds", "live_from_start",
                                   "write_info_json", "embed_metadata", "lightweight_catchup_postprocess",
                                   "cookies_from_browser", "browser", "engine", "prefetch")),
-            (("GPU変換", "GPU export"), ("gpu_export", "gpu_device", "export_height", "gpu_jobs")),
+            (("GPU変換", "GPU export"), ("gpu_export", "gpu_device", "export_height", "gpu_jobs", "gpu_preset")),
         ]
         for title, names in sections:
             frame = ttk.Frame(self.notebook, padding=10)
@@ -177,6 +181,19 @@ class LiveCatchApp(tk.Tk):
         try:
             settings = self.settings()
             settings.validate()
+            extreme = (
+                settings.concurrent_fragments > 32
+                or settings.prefetch > 4
+                or settings.gpu_jobs > 4
+                or settings.gpu_preset == "max_speed"
+            )
+            if extreme and not messagebox.askyesno("LiveCatch", self._t(
+                "高負荷の実験設定です。回線・ディスク・CPU/GPU負荷が大きくなり、"
+                "YouTube/Twitch側の429・タイムアウトや、逆に低速化する場合があります。続行しますか？",
+                "Experimental high-load settings are enabled. Network, disk and GPU/CPU load may spike; "
+                "the service may throttle with 429/timeouts and performance can get worse. Continue?"
+            )):
+                return
             self.store.save(settings)
             self._reset_progress()
             self.supervisor.start(settings)
@@ -192,7 +209,8 @@ class LiveCatchApp(tk.Tk):
             options = ydl_options(settings, find_tool("ffmpeg"))
             options.pop("retry_sleep_functions", None)
             self._log(json.dumps({"engine": settings.engine, "yt_dlp": options,
-                                  "gpu_export": settings.gpu_export}, ensure_ascii=False, indent=2))
+                                  "gpu_export": settings.gpu_export,
+                                  "gpu_preset": settings.gpu_preset}, ensure_ascii=False, indent=2))
         except Exception as exc:
             messagebox.showerror("LiveCatch", str(exc))
 
