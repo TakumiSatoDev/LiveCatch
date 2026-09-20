@@ -20,7 +20,12 @@ def test_export_commands(backend):
         assert 'h264_nvenc' in cmd and 'scale_cuda' in cmd[cmd.index('-vf')+1]
     else:assert 'libx264' in cmd and '-hwaccel' not in cmd
 
-@pytest.mark.parametrize('opts',[ExportOptions(mode='off'),ExportOptions(height=17),ExportOptions(jobs=10),ExportOptions(device=-1)])
+@pytest.mark.parametrize(('preset','ffmpeg_preset'), [('balanced','p4'),('fast','p2'),('max_speed','p1')])
+def test_nvenc_speed_presets(preset,ffmpeg_preset):
+    cmd=export_command('ffmpeg',Path('original.mkv'),Path('temp.mp4'),ExportOptions(preset=preset),'cuda')
+    assert cmd[cmd.index('-preset')+1]==ffmpeg_preset
+
+@pytest.mark.parametrize('opts',[ExportOptions(mode='off'),ExportOptions(height=17),ExportOptions(jobs=9),ExportOptions(device=-1),ExportOptions(preset='warp')])
 def test_bad_export_options(opts):
     with pytest.raises(ValueError):opts.validate()
 
