@@ -6,7 +6,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from livecatch_core.config import ConfigStore
 from livecatch_core.gui import LiveCatchApp
 with tempfile.TemporaryDirectory() as directory:
-    app=LiveCatchApp(ConfigStore(Path(directory)/'config.json'))
+    app=LiveCatchApp(ConfigStore(Path(directory)/'config.json'), update_checker=lambda _version: None)
     try:
         app.update()
         assert app.settings().gpu_export=='off'

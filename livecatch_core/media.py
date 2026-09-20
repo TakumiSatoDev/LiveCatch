@@ -182,9 +182,13 @@ def export_batch(sources: list[Path], options: ExportOptions, ffmpeg: str, ffpro
             emit("warning", message="CUDA unavailable; using CPU: " + detail)
     sources = list(dict.fromkeys(p.resolve() for p in sources))
 
-    def run(source):
+    total = len(sources)
+
+    def run(item):
+        index, source = item
         target = source.with_name(source.stem + ".export.mp4")
+        emit("export_batch", current=index, total=total, path=str(source), backend=backend)
         return export_one(source, target, options, backend, ffmpeg, ffprobe, cancel, emit)
 
     with OrderedPrefetch(options.jobs, options.jobs, cancel) as pool:
-        return list(pool.map(run, sources))
+        return list(pool.map(run, enumerate(sources, start=1)))

@@ -103,8 +103,9 @@ def _patch_class(cls, cancel: Event, *, prefetch: int, snapshot: bool, emit):
         finally:
             if "fragment_filename_sanitized" not in committed:
                 ctx.pop("fragment_filename_sanitized", None)
+        total = ctx.get("total_frags") or ctx.get("fragment_count")
         emit("fragment", stream=ctx.get("_lc_stream", "media"),
-             current=committed.get("fragment_index", 0), bytes=len(data))
+             current=committed.get("fragment_index", 0), total=total, bytes=len(data))
         return result
 
     patched._livecatch_patch = True

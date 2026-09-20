@@ -7,6 +7,7 @@ import pytest
 from livecatch_core.config import ConfigStore, Settings, DEFAULT_TEMPLATE, normalize_url
 from livecatch_core.events import Emitter, EventBuffer, redact
 from livecatch_core.options import ydl_options
+from livecatch_core.updates import UpdateCheck, check_for_update, is_newer
 from livecatch_core.ytdlp_patch import require_supported_version
 
 @pytest.mark.parametrize('url', ['youtube.com/watch?v=abc','https://www.youtube.com/live/abc','https://youtu.be/abc','https://twitch.tv/example'])
@@ -79,3 +80,25 @@ def test_reviewed_versions(version): require_supported_version(version)
 @pytest.mark.parametrize('version', ['2026.08.20','2026.08.19.dev0','junk','2025.1.1'])
 def test_unreviewed_versions(version):
     with pytest.raises(RuntimeError):require_supported_version(version)
+
+
+@pytest.mark.parametrize(('current','latest','expected'), [
+    ('3.0.0-dev1', '3.0.0-dev2', True),
+    ('3.0.0-dev2', '3.0.0', True),
+    ('3.0.0', '3.0.0-dev3', False),
+    ('3.0.0', '3.0.0', False),
+])
+def test_update_version_order(current, latest, expected):
+    assert is_newer(current, latest) is expected
+
+
+def test_check_for_update(monkeypatch):
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def read(self, _limit): return b'__version__ = "3.0.0-dev2"\n'
+
+    monkeypatch.setattr("livecatch_core.updates.urlopen", lambda *args, **kwargs: Response())
+    result = check_for_update("3.0.0-dev1")
+    assert isinstance(result, UpdateCheck)
+    assert result.latest_version == "3.0.0-dev2" and result.update_available

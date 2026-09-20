@@ -69,8 +69,20 @@ def record(settings: Settings, cancel: Event, emit) -> int:
         if cancel.is_set() and p.get("status") == "downloading" and (
                 settings.engine == "stock" or "fragment_index" not in p):
             raise KeyboardInterrupt()
-        emit("progress", stream=p.get("info_dict", {}).get("format_id", "media"),
-             status=p.get("status"), downloaded_bytes=p.get("downloaded_bytes"), speed=p.get("speed"))
+        info_dict = p.get("info_dict") or {}
+        fragment_index = p.get("fragment_index")
+        fragment_count = p.get("fragment_count")
+        percent = None
+        if isinstance(fragment_index, int) and isinstance(fragment_count, int) and fragment_count > 0:
+            percent = min(100.0, max(0.0, fragment_index * 100 / fragment_count))
+        elif isinstance(p.get("downloaded_bytes"), int) and isinstance(p.get("total_bytes"), int) \
+                and p["total_bytes"] > 0:
+            percent = min(100.0, max(0.0, p["downloaded_bytes"] * 100 / p["total_bytes"]))
+        emit("progress", stream=info_dict.get("format_id", "media"),
+             status=p.get("status"), downloaded_bytes=p.get("downloaded_bytes"),
+             total_bytes=p.get("total_bytes") or p.get("total_bytes_estimate"),
+             speed=p.get("speed"), fragment_index=fragment_index,
+             fragment_count=fragment_count, percent=percent)
 
     def postprocess(p):
         if p.get("postprocessor") not in ("ValidateDownload", "CaptureOutput"):

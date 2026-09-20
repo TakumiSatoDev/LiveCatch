@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+import webbrowser
 from threading import Thread
 
 from . import __version__
@@ -17,6 +18,16 @@ from .media import probe_cuda
 from .options import ydl_options
 from .supervisor import Supervisor
 from .tools import find_tool
+from .updates import UpdateCheck, check_for_update
+
+PHASE_LABELS = {
+    "starting": ("開始準備中", "Preparing"),
+    "extracting": ("配信情報を取得中", "Extracting stream info"),
+    "downloading": ("録画・ダウンロード中", "Recording / downloading"),
+    "postprocessing": ("結合・後処理中", "Muxing / post-processing"),
+    "exporting": ("動画を変換中", "Exporting video"),
+    "done": ("完了", "Completed"),
+}
 
 LABELS = {
     "mode": ("録画モード", "Recording mode"), "url": ("YouTube / Twitch URL", "YouTube / Twitch URL"),
@@ -42,7 +53,7 @@ CHOICES = {"mode": ("reservation", "live_full", "catchup_stop"), "browser": BROW
 
 
 class LiveCatchApp(tk.Tk):
-    def __init__(self, store: ConfigStore | None = None):
+    def __init__(self, store: ConfigStore | None = None, update_checker=check_for_update):
         super().__init__()
         self.title(f"LiveCatch {__version__}")
         self.geometry("1040x820")
@@ -57,9 +68,16 @@ class LiveCatchApp(tk.Tk):
         self.vars = {f.name: (tk.BooleanVar(value=getattr(settings, f.name)) if type(getattr(settings, f.name)) is bool
                              else tk.StringVar(value=str(getattr(settings, f.name)))) for f in fields(Settings)}
         self.closing = False
+        self._progress = {
+            "phase": "starting", "active": False, "streams": {}, "detail": "",
+            "export_current": 0, "export_total": 0, "outputs": 0,
+        }
+        self._update_checker = update_checker
+        self._update_info: UpdateCheck | None = None
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(100, self._poll)
+        self._check_updates()
 
     def _t(self, ja, en):
         return en if self.vars["language"].get() == "en" else ja
@@ -70,6 +88,12 @@ class LiveCatchApp(tk.Tk):
         header = ttk.Frame(self.body)
         header.pack(fill="x")
         ttk.Label(header, text=f"LiveCatch {__version__}", font=("", 20, "bold")).pack(side="left")
+        self.update_var = tk.StringVar(value=self._t("更新を確認中…", "Checking for updates…"))
+        self.update_label = ttk.Label(header, textvariable=self.update_var, cursor="hand2")
+        self.update_label.pack(side="right", padx=(8, 0))
+        self.update_label.bind("<Button-1>", lambda _event: self._open_update())
+        if self._update_info is not None:
+            self._apply_update_result(self._update_info)
         lang = ttk.Combobox(header, textvariable=self.vars["language"], values=("ja", "en"), state="readonly", width=5)
         lang.pack(side="right")
         lang.bind("<<ComboboxSelected>>", self._rebuild)
@@ -106,6 +130,17 @@ class LiveCatchApp(tk.Tk):
             "reservation = wait / live_full = until end / catchup_stop = shared initial cutoff (YouTube DVR).\n"
             "GPU does not accelerate networking. off preserves source; auto/cuda/cpu create a separate lossy MP4."),
                   ).pack(anchor="w", pady=(0, 8))
+        status = ttk.LabelFrame(self.body, text=self._t("進行状況", "Progress"), padding=8)
+        status.pack(fill="x", pady=(0, 8))
+        status.columnconfigure(1, weight=1)
+        ttk.Label(status, text=self._t("状態", "Status")).grid(row=0, column=0, sticky="w", padx=(0, 12))
+        self.phase_var = tk.StringVar()
+        ttk.Label(status, textvariable=self.phase_var).grid(row=0, column=1, sticky="w")
+        self.progressbar = ttk.Progressbar(status, mode="indeterminate", maximum=100)
+        self.progressbar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 2))
+        self.detail_var = tk.StringVar()
+        ttk.Label(status, textvariable=self.detail_var).grid(row=2, column=0, columnspan=2, sticky="w")
+        self._render_progress()
         bar = ttk.Frame(self.body)
         bar.pack(fill="x")
         self.start_button = ttk.Button(bar, text=self._t("開始", "Start"), command=self._start)
@@ -143,7 +178,10 @@ class LiveCatchApp(tk.Tk):
             settings = self.settings()
             settings.validate()
             self.store.save(settings)
+            self._reset_progress()
             self.supervisor.start(settings)
+            self._progress["active"] = True
+            self._render_progress()
             self.start_button.configure(state="disabled")
         except Exception as exc:
             messagebox.showerror("LiveCatch", str(exc))
@@ -204,16 +242,144 @@ class LiveCatchApp(tk.Tk):
             return
         self.destroy()
 
+    def _check_updates(self):
+        def work():
+            try:
+                result = self._update_checker(__version__)
+            except Exception:
+                result = None
+            try:
+                self.after(0, lambda: self._apply_update_result(result))
+            except RuntimeError:
+                pass
+
+        Thread(target=work, daemon=True, name="lc-update-check").start()
+
+    def _apply_update_result(self, result: UpdateCheck | None):
+        self._update_info = result
+        if result is None:
+            self.update_var.set(self._t("更新確認できません", "Update check unavailable"))
+        elif result.update_available:
+            self.update_var.set(self._t(
+                f"アップデートあり: v{result.latest_version}",
+                f"Update available: v{result.latest_version}"))
+        else:
+            self.update_var.set(self._t("最新です", "Up to date"))
+
+    def _open_update(self):
+        if self._update_info and self._update_info.update_available:
+            webbrowser.open(self._update_info.url)
+
+    def _reset_progress(self):
+        self._progress = {
+            "phase": "starting", "active": False, "streams": {}, "detail": "",
+            "export_current": 0, "export_total": 0, "outputs": 0,
+        }
+        self._render_progress()
+
+    def _phase_text(self, phase: str) -> str:
+        ja, en = PHASE_LABELS.get(phase, (phase, phase))
+        return self._t(ja, en)
+
+    def _handle_progress_event(self, event: dict):
+        kind = event.get("event")
+        if kind == "phase":
+            self._progress["phase"] = event.get("name", "starting")
+        elif kind == "progress":
+            stream = event.get("stream", "media")
+            state = self._progress["streams"].setdefault(stream, {})
+            state.update(event)
+            self._progress["detail"] = stream
+        elif kind == "fragment":
+            stream = event.get("stream", "media")
+            state = self._progress["streams"].setdefault(stream, {})
+            state.update(event)
+            self._progress["detail"] = stream
+        elif kind == "streams":
+            self._progress["detail"] = self._t(
+                f"音声・映像 {event.get('count', '?')}ストリームを処理中",
+                f"Processing {event.get('count', '?')} audio/video streams")
+        elif kind == "snapshot":
+            self._progress["detail"] = self._t(
+                f"現在まで取得: sequence {event.get('exclusive_sequence', '?')} まで",
+                f"Snapshot cutoff: sequence {event.get('exclusive_sequence', '?')}")
+        elif kind == "output":
+            self._progress["outputs"] += 1
+            self._progress["detail"] = self._t(
+                f"保存済み {self._progress['outputs']}件: {event.get('path', '')}",
+                f"Saved {self._progress['outputs']}: {event.get('path', '')}")
+        elif kind == "export_batch":
+            self._progress["phase"] = "exporting"
+            self._progress["export_current"] = event.get("current", 0)
+            self._progress["export_total"] = event.get("total", 0)
+            self._progress["detail"] = self._t(
+                f"変換 {event.get('current', '?')}/{event.get('total', '?')}: {event.get('path', '')}",
+                f"Export {event.get('current', '?')}/{event.get('total', '?')}: {event.get('path', '')}")
+        elif kind == "exported":
+            self._progress["detail"] = self._t(
+                f"変換済み: {event.get('path', '')}",
+                f"Exported: {event.get('path', '')}")
+        elif kind == "done":
+            self._progress["active"] = False
+            self._progress["phase"] = "done" if event.get("status") == "completed" else event.get("status", "failed")
+            self._progress["detail"] = self._t(
+                f"終了: {event.get('status', 'failed')}",
+                f"Finished: {event.get('status', 'failed')}")
+            if event.get("status") == "completed":
+                self._progress["percent"] = 100.0
+        self._render_progress()
+
+    def _render_progress(self):
+        if not hasattr(self, "phase_var"):
+            return
+        phase = self._progress.get("phase", "starting")
+        self.phase_var.set(self._phase_text(phase))
+        detail = self._progress.get("detail", "")
+        if not detail:
+            known = []
+            for state in self._progress.get("streams", {}).values():
+                percent = state.get("percent")
+                if isinstance(percent, (int, float)):
+                    known.append(float(percent))
+            if known:
+                detail = self._t(f"全体の目安 {min(known):.1f}%", f"Overall estimate {min(known):.1f}%")
+            elif self._progress.get("active"):
+                detail = self._t("処理中…", "Working…")
+        self.detail_var.set(detail)
+        percent_values = []
+        for state in self._progress.get("streams", {}).values():
+            percent = state.get("percent")
+            if isinstance(percent, (int, float)):
+                percent_values.append(float(percent))
+        if self._progress.get("export_total"):
+            percent_values.append(100 * self._progress["export_current"] / self._progress["export_total"])
+        if isinstance(self._progress.get("percent"), (int, float)):
+            percent_values = [self._progress["percent"]]
+        if percent_values:
+            self.progressbar.stop()
+            self.progressbar.configure(mode="determinate", maximum=100, value=min(percent_values))
+        elif self._progress.get("active"):
+            if self.progressbar.cget("mode") != "indeterminate":
+                self.progressbar.configure(mode="indeterminate")
+                self.progressbar.start(10)
+        else:
+            self.progressbar.stop()
+            self.progressbar.configure(mode="determinate", maximum=100, value=0)
+
     def _poll(self):
         events = self.supervisor.events.drain()
+        log_events = []
         for event in events:
+            self._handle_progress_event(event)
             if event["event"] == "done":
                 self.start_button.configure(state="normal")
                 if self.closing:
                     self.destroy()
                     return
-        if events:
-            self._log("\n".join(e.get("message") or json.dumps(e, ensure_ascii=False) for e in events))
+            if event["event"] not in {"phase", "progress", "fragment", "streams", "snapshot", "export_batch"}:
+                log_events.append(event)
+        if log_events:
+            self._log("\n".join(e.get("message") or json.dumps(e, ensure_ascii=False) for e in log_events))
         self.after(100, self._poll)
 
     def _log(self, text):
