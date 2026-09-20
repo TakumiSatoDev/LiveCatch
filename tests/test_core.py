@@ -31,6 +31,11 @@ def test_validation(changes):
 def test_config_types(data):
     with pytest.raises(ValueError): Settings.from_dict(data)
 
+def test_legacy_gpu_export_is_disabled_on_load():
+    cfg=Settings.from_dict({'gpu_export':'cuda','gpu_jobs':8,'gpu_preset':'max_speed'})
+    assert cfg.gpu_export=='off'
+
+
 def test_extreme_limits_are_explicitly_allowed():
     replace(Settings(url='https://youtu.be/test'), concurrent_fragments=128, prefetch=8,
             gpu_jobs=8, gpu_preset='max_speed').validate()
