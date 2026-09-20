@@ -102,7 +102,7 @@ class Settings:
         for name, allowed in choices.items():
             if getattr(self, name) not in allowed:
                 raise ValueError(f"Invalid {name}: {getattr(self, name)!r}")
-        for name, lo, hi in (("wait_seconds", 5, 3600), ("concurrent_fragments", 1, 128),
+        for name, lo, hi in (("wait_seconds", 5, 3600), ("concurrent_fragments", 1, 256),
                              ("prefetch", 1, 8), ("gpu_device", 0, 31), ("gpu_jobs", 1, 8)):
             if type(getattr(self, name)) is not int or not lo <= getattr(self, name) <= hi:
                 raise ValueError(f"{name} must be in {lo}..{hi}")
