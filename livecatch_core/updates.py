@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import re
 from urllib.request import Request, urlopen
 
-REPOSITORY_URL = "https://github.com/TakumiSatoDev/LiveCatch"
+REPOSITORY_URL = "https://github.com/TakumiSatoDev/LiveCatch/releases/latest"
 MAIN_VERSION_URL = (
     "https://raw.githubusercontent.com/TakumiSatoDev/LiveCatch/main/"
     "livecatch_core/__init__.py"

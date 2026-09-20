@@ -102,3 +102,4 @@ def test_check_for_update(monkeypatch):
     result = check_for_update("3.0.0-dev1")
     assert isinstance(result, UpdateCheck)
     assert result.latest_version == "3.0.0-dev2" and result.update_available
+    assert result.url.endswith("/releases/latest")
