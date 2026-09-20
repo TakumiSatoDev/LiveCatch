@@ -21,6 +21,7 @@ STATUS = {
     "offline": ("オフライン", "Offline"), "live": ("配信中", "Live"),
     "record_starting": ("録画開始準備中", "Preparing recording"),
     "record_extracting": ("配信情報取得中", "Extracting stream info"),
+    "catching_up": ("ライブへ追いつき中", "Catching up to live"),
     "recording": ("録画・ダウンロード中", "Recording / downloading"),
     "postprocessing": ("結合・後処理中", "Muxing / post-processing"),
     "queued": ("録画枠待ち", "Waiting for slot"), "manual": ("手動で録画中", "Manual recording"),
@@ -156,7 +157,34 @@ class TwitchWatchApp(LiveCatchApp):
             return ""
         if state.recording is None:
             return "100%" if state.status == "completed" else ""
+
         progress = list(state.progress.values())
+        speeds = [float(p["speed"]) for p in progress
+                  if isinstance(p.get("speed"), (int, float)) and p["speed"] > 0]
+
+        if state.catchup_active and state.phase == "downloading":
+            catchup_states = list(state.catchup.values())
+            percentages = [float(p["percent"]) for p in catchup_states
+                           if isinstance(p.get("percent"), (int, float))]
+            gaps = [int(p["gap_fragments"]) for p in catchup_states
+                    if isinstance(p.get("gap_fragments"), int)]
+            parts = []
+            if state.caught_up:
+                parts.append("LIVE")
+            elif percentages:
+                parts.append(self._t(
+                    f"追いつき {min(percentages):.0f}%",
+                    f"Catch-up {min(percentages):.0f}%"))
+                if gaps:
+                    parts.append(self._t(
+                        f"残り約{max(gaps)} frag",
+                        f"~{max(gaps)} frag left"))
+            else:
+                parts.append(self._t("追いつき計算中…", "Calculating catch-up…"))
+            if speeds:
+                parts.append(f"{self._format_bytes(sum(speeds))}/s")
+            return " · ".join(parts)
+
         percentages = [float(p["percent"]) for p in progress
                        if isinstance(p.get("percent"), (int, float))]
         fragments = [(p.get("fragment_index"), p.get("fragment_count")) for p in progress]
@@ -172,8 +200,6 @@ class TwitchWatchApp(LiveCatchApp):
             current = [cur for cur, _total in fragments if isinstance(cur, int)]
             if current:
                 parts.append(f"frag {max(current)}")
-        speeds = [float(p["speed"]) for p in progress
-                  if isinstance(p.get("speed"), (int, float)) and p["speed"] > 0]
         if speeds:
             parts.append(f"{self._format_bytes(sum(speeds))}/s")
         if parts:
