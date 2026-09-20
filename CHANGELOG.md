@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.1.0
+
+### Added
+
+- YouTube / Twitch channel monitoring with automatic recording and optional Windows background/tray mode.
+- Self-update integration for the automatic-recording desktop app, including safeguards against updating during monitoring, recording, or finalization.
+- Windows release packages now include the in-app updater alongside the installer.
+
 ## v3.0.3
 
 ### Added
