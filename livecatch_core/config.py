@@ -62,6 +62,7 @@ class Settings:
     gpu_device: int = 0
     export_height: int = 0
     gpu_jobs: int = 1
+    gpu_preset: str = "balanced"
 
     @classmethod
     def from_dict(cls, data: dict) -> Settings:
@@ -92,12 +93,13 @@ class Settings:
             "output_format": ("mp4", "mkv", "webm"),
             "engine": ("bounded", "stock"),
             "gpu_export": ("off", "auto", "cuda", "cpu"),
+            "gpu_preset": ("balanced", "fast", "max_speed"),
         }
         for name, allowed in choices.items():
             if getattr(self, name) not in allowed:
                 raise ValueError(f"Invalid {name}: {getattr(self, name)!r}")
-        for name, lo, hi in (("wait_seconds", 5, 3600), ("concurrent_fragments", 1, 32),
-                             ("prefetch", 1, 4), ("gpu_device", 0, 31), ("gpu_jobs", 1, 4)):
+        for name, lo, hi in (("wait_seconds", 5, 3600), ("concurrent_fragments", 1, 128),
+                             ("prefetch", 1, 8), ("gpu_device", 0, 31), ("gpu_jobs", 1, 8)):
             if type(getattr(self, name)) is not int or not lo <= getattr(self, name) <= hi:
                 raise ValueError(f"{name} must be in {lo}..{hi}")
         if self.export_height not in (0, 360, 480, 720, 1080, 1440, 2160):
