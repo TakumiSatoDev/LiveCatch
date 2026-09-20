@@ -26,8 +26,11 @@ class Emitter:
             if kind in ("progress", "fragment", "catchup"):
                 key = (kind, data.get("stream"))
                 now = monotonic()
-                if now - self.last.get(key, -1) < 0.25:
-                    return
+                # The final catch-up edge event must never be dropped; a finite
+                # growing VOD may finish before another telemetry tick arrives.
+                if not (kind == "catchup" and data.get("caught_up") is True):
+                    if now - self.last.get(key, -1) < 0.25:
+                        return
                 self.last[key] = now
             if "message" in data:
                 data["message"] = redact(str(data["message"]))[:8000]
