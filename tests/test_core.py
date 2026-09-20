@@ -7,7 +7,7 @@ import zipfile
 from types import SimpleNamespace
 import pytest
 
-from livecatch_core.config import ConfigStore, Settings, DEFAULT_TEMPLATE, normalize_url
+from livecatch_core.config import ConfigStore, Settings, DEFAULT_TEMPLATE, LEGACY_DEFAULT_TEMPLATE_V2, LEGACY_DEFAULT_TEMPLATE_V3, normalize_url
 from livecatch_core.events import Emitter, EventBuffer, redact
 from livecatch_core.options import ydl_options
 from livecatch_core.updates import UpdateCheck, check_for_update, download_update, is_newer
@@ -38,10 +38,16 @@ def test_extreme_limits_are_explicitly_allowed():
 def test_migration_atomic_preserve(tmp_path):
     path=tmp_path/'settings.json'; store=ConfigStore(path)
     assert store.load()==Settings()
-    path.write_text(json.dumps({'version':'2.1.3','future_setting':{'x':1},'concurrent_fragments':128,'output_template':DEFAULT_TEMPLATE.removeprefix('%(extractor_key)s/')}))
+    path.write_text(json.dumps({'version':'2.1.3','future_setting':{'x':1},'concurrent_fragments':128,'output_template':LEGACY_DEFAULT_TEMPLATE_V2}))
     cfg=store.load(); assert cfg.concurrent_fragments==32 and cfg.output_template==DEFAULT_TEMPLATE
     store.save(cfg); assert json.loads(path.read_text())['future_setting']=={'x':1}
     assert len(list(tmp_path.iterdir()))==1
+
+def test_current_default_template_migrates_to_channel_layout():
+    cfg=Settings.from_dict({'output_template':LEGACY_DEFAULT_TEMPLATE_V3})
+    assert cfg.output_template==DEFAULT_TEMPLATE
+    assert DEFAULT_TEMPLATE.startswith('%(uploader_id)s/')
+
 
 def test_corrupt_config_not_overwritten(tmp_path):
     path=tmp_path/'settings.json';path.write_text('{bad')
@@ -63,6 +69,11 @@ def test_api_options(tmp_path):
     assert opts['skip_unavailable_fragments'] is False and opts['overwrites'] is False
     assert opts['postprocessors'][0]['preferedformat']=='mp4'
     assert opts['retry_sleep_functions']['fragment'](100)==30
+    assert opts['outtmpl'].startswith('YouTube/%(uploader_id)s/')
+    twitch=ydl_options(replace(cfg,url='https://twitch.tv/example'),'C:/tools/ffmpeg.exe')
+    assert twitch['outtmpl'].startswith('Twitch/%(uploader_id)s/')
+    custom=ydl_options(replace(cfg,output_template='custom/%(title)s.%(ext)s'))
+    assert custom['outtmpl']=='custom/%(title)s.%(ext)s'
     opts=ydl_options(replace(cfg,mode='catchup_stop',lightweight_catchup_postprocess=True))
     assert 'wait_for_video' not in opts and len(opts['postprocessors'])==1
     assert opts['live_from_start']

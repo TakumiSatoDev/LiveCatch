@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.2.1
+
+### Changed
+
+- The default manual recording layout now groups files by service and channel before the per-broadcast folder.
+- Legacy default output templates migrate automatically; custom output templates are preserved.
+- README clarifies that GPU export is optional and intended for transcoding/compatibility rather than recording speed.
+
 ## v3.2.0
 
 ### Added

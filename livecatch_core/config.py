@@ -9,7 +9,9 @@ import tempfile
 from urllib.parse import urlsplit
 
 CONFIG_FILE = Path.home() / ".livecatch_config.json"
-DEFAULT_TEMPLATE = "%(extractor_key)s/%(upload_date)s_%(channel)s_%(title)s/%(upload_date)s_%(title)s.%(ext)s"
+LEGACY_DEFAULT_TEMPLATE_V3 = "%(extractor_key)s/%(upload_date)s_%(channel)s_%(title)s/%(upload_date)s_%(title)s.%(ext)s"
+LEGACY_DEFAULT_TEMPLATE_V2 = LEGACY_DEFAULT_TEMPLATE_V3.removeprefix("%(extractor_key)s/")
+DEFAULT_TEMPLATE = "%(uploader_id)s/%(upload_date)s_%(id)s_%(title)s/%(upload_date)s_%(title)s.%(ext)s"
 QUALITY = {
     "recommended_1080p": "bv*[height<=1080]+ba/b[height<=1080]/b",
     "catchup_720p30": "bv*[height<=720][fps<=30]+ba/b[height<=720][fps<=30]/bv*[height<=720]+ba/b[height<=720]/b",
@@ -77,8 +79,7 @@ class Settings:
                 raise ValueError(f"Invalid type for {f.name}")
             clean[f.name] = value
         clean["schema_version"] = 3
-        legacy = DEFAULT_TEMPLATE.removeprefix("%(extractor_key)s/")
-        if clean["output_template"] == legacy:
+        if clean["output_template"] in (LEGACY_DEFAULT_TEMPLATE_V2, LEGACY_DEFAULT_TEMPLATE_V3):
             clean["output_template"] = DEFAULT_TEMPLATE
         result = cls(**clean)
         result.validate(require_url=False)

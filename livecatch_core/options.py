@@ -3,8 +3,18 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from .config import QUALITY, Settings
+from .config import DEFAULT_TEMPLATE, QUALITY, Settings, normalize_url
+
+
+def _output_template(settings: Settings) -> str:
+    template = settings.output_template
+    if template != DEFAULT_TEMPLATE:
+        return template
+    host = (urlsplit(normalize_url(settings.url)).hostname or "").lower()
+    service = "Twitch" if host == "twitch.tv" or host.endswith(".twitch.tv") else "YouTube"
+    return f"{service}/{template}"
 
 
 def ydl_options(settings: Settings, ffmpeg: str | None = None) -> dict:
@@ -20,7 +30,7 @@ def ydl_options(settings: Settings, ffmpeg: str | None = None) -> dict:
     result = {
         "format": QUALITY[settings.quality_preset],
         "paths": paths,
-        "outtmpl": settings.output_template,
+        "outtmpl": _output_template(settings),
         "merge_output_format": settings.output_format,
         "postprocessors": processors,
         "concurrent_fragment_downloads": settings.concurrent_fragments,
