@@ -35,6 +35,8 @@ MONITOR_PRESETS = {
     "fast": (64, 4),
     "extreme": (96, 6),
     "max": (128, 8),
+    "ultra": (192, 8),
+    "experimental_256": (256, 8),
 }
 CATCHUP_MODES = ("from_start", "live_edge")
 _RESERVED = {"videos", "directory", "downloads", "settings", "inventory", "subscriptions",
