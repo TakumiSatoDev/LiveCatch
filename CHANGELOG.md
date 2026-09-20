@@ -1,5 +1,24 @@
 # Changelog
 
+## v3.2.0
+
+### Added
+
+- Monitoring can accept YouTube/Twitch channel registrations while already running and checks newly added channels immediately.
+- `from_start` monitoring catch-up can recover the available YouTube DVR range and the associated growing Twitch VOD when supported, with `live_edge` available for detection-point recording.
+- Separate monitoring performance presets: manual, balanced, fast, extreme and max.
+- Manual and automatic recordings now show live elapsed time and final processing duration.
+
+### Changed
+
+- Recording, advanced, GPU and background controls are consolidated into a smaller Recording / Settings / Auto-record layout.
+- New monitoring configurations default to the `fast` preset while existing saved configurations without a preset retain legacy manual values.
+
+### Fixed
+
+- Windows UI startup now hardens UTF-8 handling and repairs common UTF-8-as-CP932 mojibake in Japanese labels.
+- Windows release builds execute the packaged LiveCatch.exe Unicode smoke test before publishing.
+
 ## v3.1.2
 
 ### Documentation

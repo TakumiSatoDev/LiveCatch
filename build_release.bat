@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 if "%~1"=="" (
-    echo Usage: build_release.bat 3.1.2
+    echo Usage: build_release.bat 3.2.0
     exit /b 2
 )
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_release.ps1 -Version "%~1"
