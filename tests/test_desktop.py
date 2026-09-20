@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-@pytest.mark.parametrize('case',['mixed','tray','failure','commands','startup'])
+@pytest.mark.parametrize('case',['mixed','tray','failure','commands','startup','updater'])
 def test_desktop(case):
     root=Path(__file__).resolve().parents[1]
     command=[sys.executable,str(root/'tests'/'desktop_cases.py'),case]

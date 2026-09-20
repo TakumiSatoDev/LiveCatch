@@ -68,6 +68,23 @@ with tempfile.TemporaryDirectory() as directory:
             tray.commands.put(('start',''));app._drain_tray();assert manager.running
             tray.commands.put(('pause',''));app._drain_tray();assert not manager.running
             tray.commands.put(('exit',''));app._drain_tray();assert app._destroyed and tray.stopped
+        elif case=='updater':
+            from livecatch_core.gui import LiveCatchApp
+            launches=[];finished=[]
+            LiveCatchApp._start_self_update=lambda self:launches.append(True)
+            LiveCatchApp._finish_self_update=lambda self,payload,error:finished.append(error)
+            app.watch_input.set('@Example');app._watch_add();app._watch_start()
+            app._start_self_update()
+            assert warnings and not launches
+            manager.shutdown();manager.tick()
+            app._start_self_update();assert launches==[True]
+            app._update_installing=True
+            app._watch_start();app._start()
+            assert not manager.running and not app.supervisor.active
+            manager.running=True
+            app._finish_self_update(root,None)
+            assert isinstance(finished[-1],RuntimeError)
+            manager.running=False
         elif case=='startup':
             app.close_to_tray.set(True);app.start_hidden.set(True)
             original=desktop.sys.platform

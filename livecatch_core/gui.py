@@ -18,7 +18,9 @@ from .media import probe_cuda
 from .options import ydl_options
 from .supervisor import Supervisor
 from .tools import find_tool
-from .updates import UpdateCheck, check_for_update
+from .updates import UpdateCheck, check_for_update, download_update
+
+UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
 PHASE_LABELS = {
     "starting": ("開始準備中", "Preparing"),
@@ -86,10 +88,12 @@ class LiveCatchApp(tk.Tk):
         self._update_checker = update_checker
         self._update_info: UpdateCheck | None = None
         self._update_checking = False
+        self._update_installing = False
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(100, self._poll)
         self._check_updates()
+        self.after(UPDATE_CHECK_INTERVAL_MS, self._scheduled_update_check)
 
     def _t(self, ja, en):
         return en if self.vars["language"].get() == "en" else ja
@@ -101,8 +105,10 @@ class LiveCatchApp(tk.Tk):
         header.pack(fill="x")
         ttk.Label(header, text=f"LiveCatch {__version__}", font=("", 20, "bold")).pack(side="left")
         self.update_var = tk.StringVar(value=self._t("更新を確認中…", "Checking for updates…"))
-        self.update_button = ttk.Button(header, textvariable=self.update_var, command=self._open_update)
-        self.update_button.pack(side="right", padx=(8, 0))
+        ttk.Label(header, textvariable=self.update_var).pack(side="right", padx=(8, 0))
+        self.update_action_var = tk.StringVar(value=self._t("更新を確認", "Check for updates"))
+        self.update_button = ttk.Button(header, textvariable=self.update_action_var, command=self._open_update)
+        self.update_button.pack(side="right")
         self.update_button.configure(state="disabled" if self._update_checking else "normal")
         if self._update_info is not None:
             self._apply_update_result(self._update_info)
@@ -289,10 +295,11 @@ class LiveCatchApp(tk.Tk):
         self.destroy()
 
     def _check_updates(self):
-        if self._update_checking:
+        if self._update_checking or self._update_installing:
             return
         self._update_checking = True
         self.update_var.set(self._t("更新を確認中…", "Checking for updates…"))
+        self.update_action_var.set(self._t("確認中…", "Checking…"))
         self.update_button.configure(state="disabled")
 
         def work():
@@ -315,23 +322,98 @@ class LiveCatchApp(tk.Tk):
     def _apply_update_result(self, result: UpdateCheck | None):
         self._update_info = result
         if result is None:
-            self.update_var.set(self._t("更新確認できません（クリックで再試行）", "Update check unavailable (click to retry)"))
+            self.update_var.set(self._t("更新を確認できません", "Update check unavailable"))
+            self.update_action_var.set(self._t("再確認", "Retry"))
         elif result.update_available:
             self.update_var.set(self._t(
-                f"アップデートあり: v{result.latest_version}",
-                f"Update available: v{result.latest_version}"))
+                f"更新版があります v{result.latest_version}",
+                f"Update available v{result.latest_version}"))
+            self.update_action_var.set(self._t(
+                "更新する" if result.download_url else "詳細を開く",
+                "Update now" if result.download_url else "Open release"))
         else:
             self.update_var.set(self._t(
-                f"最新です v{result.latest_version}（クリックで再確認）",
-                f"Up to date v{result.latest_version} (click to recheck)"))
+                f"最新版です v{result.latest_version}",
+                f"Up to date v{result.latest_version}"))
+            self.update_action_var.set(self._t("更新を確認", "Check for updates"))
 
     def _open_update(self):
-        if self._update_checking:
+        if self._update_checking or self._update_installing:
             return
         if self._update_info and self._update_info.update_available:
-            webbrowser.open(self._update_info.url)
+            if not self._update_info.download_url or not getattr(sys, "frozen", False):
+                webbrowser.open(self._update_info.url)
+                return
+            if self.supervisor.active:
+                messagebox.showwarning(
+                    "LiveCatch",
+                    self._t("録画中は更新できません。録画を終了してから実行してください。",
+                            "Updates are unavailable while recording. Finish the recording first."),
+                )
+                return
+            if messagebox.askyesno(
+                "LiveCatch",
+                self._t(
+                    f"v{self._update_info.latest_version}へ更新します。アプリを終了して更新後に再起動しますか？",
+                    f"Update to v{self._update_info.latest_version} and restart LiveCatch now?",
+                ),
+            ):
+                self._start_self_update()
         else:
             self._check_updates()
+
+    def _scheduled_update_check(self):
+        if not self.closing and not self._update_installing:
+            self._check_updates()
+        if self.winfo_exists():
+            self.after(UPDATE_CHECK_INTERVAL_MS, self._scheduled_update_check)
+
+    def _start_self_update(self):
+        update = self._update_info
+        if not update or not update.download_url:
+            return
+        self._update_installing = True
+        self.update_var.set(self._t("更新ファイルを取得中…", "Downloading update…"))
+        self.update_action_var.set(self._t("更新中…", "Updating…"))
+        self.update_button.configure(state="disabled")
+
+        def work():
+            try:
+                payload = download_update(update)
+                result = (payload, None)
+            except Exception as exc:
+                result = (None, exc)
+            try:
+                self.after(0, lambda: self._finish_self_update(*result))
+            except RuntimeError:
+                pass
+
+        Thread(target=work, daemon=True, name="lc-self-update").start()
+
+    def _finish_self_update(self, payload: Path | None, error: Exception | None):
+        self._update_installing = False
+        if error is not None or payload is None:
+            self.update_var.set(self._t("更新に失敗しました", "Update failed"))
+            self.update_action_var.set(self._t("再試行", "Retry"))
+            self.update_button.configure(state="normal")
+            messagebox.showerror("LiveCatch", str(error) if error else "Update package is missing")
+            return
+        updater = payload / "LiveCatchUpdater.exe"
+        target = Path(sys.executable).resolve().parent
+        try:
+            subprocess.Popen(
+                [str(updater), "--pid", str(os.getpid()), "--payload-dir", str(payload),
+                 "--target-dir", str(target)],
+                cwd=str(payload),
+                close_fds=True,
+            )
+        except OSError as exc:
+            self.update_var.set(self._t("更新を開始できません", "Could not start updater"))
+            self.update_action_var.set(self._t("再試行", "Retry"))
+            self.update_button.configure(state="normal")
+            messagebox.showerror("LiveCatch", str(exc))
+            return
+        self.destroy()
 
     def _reset_progress(self):
         self._progress = {

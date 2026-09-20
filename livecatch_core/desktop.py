@@ -86,8 +86,37 @@ class DesktopApp(TwitchWatchApp):
         except (ValueError, OSError) as exc:
             messagebox.showerror("LiveCatch", str(exc))
 
+    def _recording_blocked_for_update(self):
+        if self._update_installing:
+            self._restore()
+            messagebox.showwarning("LiveCatch", self._t(
+                "更新処理中は新しい監視・録画を開始できません。",
+                "New monitoring/recordings cannot start during an update."))
+            return True
+        return False
+
+    def _watch_start(self):
+        if not self._recording_blocked_for_update():
+            super()._watch_start()
+
+    def _start_self_update(self):
+        if self.watch_manager.running or self.watch_manager.has_children or self.supervisor.active or self._watch_closing:
+            self._restore()
+            messagebox.showwarning("LiveCatch", self._t(
+                "更新する前に監視とすべての録画を停止し、後処理の完了を確認してください。",
+                "Pause monitoring and finish all recordings/post-processing before updating."))
+            return
+        super()._start_self_update()
+
+    def _finish_self_update(self, payload, error):
+        if error is None and payload is not None and (
+            self.watch_manager.running or self.watch_manager.has_children or self.supervisor.active or self._watch_closing
+        ):
+            error = RuntimeError("Update cancelled: monitoring or recording became active; stop it before retrying.")
+        super()._finish_self_update(payload, error)
+
     def _start(self):
-        if self._watch_closing:
+        if self._watch_closing or self._recording_blocked_for_update():
             return
         login = manual_target(self.vars["url"].get())
         active = self.watch_manager.recording_channels

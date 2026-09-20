@@ -45,4 +45,6 @@ jobs:
         with:
           name: LiveCatch v${{ steps.version.outputs.version }}
           generate_release_notes: true
-          files: dist/installer/LiveCatch-Setup-${{ steps.version.outputs.version }}.exe
+          files: |
+            dist/installer/LiveCatch-Setup-${{ steps.version.outputs.version }}.exe
+            dist/installer/LiveCatch-Update-${{ steps.version.outputs.version }}.zip
