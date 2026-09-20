@@ -30,8 +30,7 @@ def main(argv=None):
         settings = apply_monitor_preset(base_settings, config.monitor_preset)
         if not find_tool("ffmpeg") or not find_tool("ffprobe"):
             raise ValueError("ffmpeg and ffprobe are required")
-        extreme = (settings.concurrent_fragments > 32 or settings.prefetch > 4
-                   or settings.gpu_jobs > 4 or settings.gpu_preset == "max_speed")
+        extreme = settings.concurrent_fragments > 32 or settings.prefetch > 4
         if extreme and not args.allow_extreme:
             raise ValueError("High-load settings require --allow-extreme for headless monitoring")
         manager.configure(config, settings)
