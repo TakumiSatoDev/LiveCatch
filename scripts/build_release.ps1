@@ -32,6 +32,9 @@ if ($LASTEXITCODE -ne 0) { throw "LiveCatchWorker build failed." }
 & $Python -m PyInstaller --noconfirm --clean --onefile --windowed --name LiveCatch `
     --collect-all yt_dlp --collect-all yt_dlp_ejs --collect-all pystray --hidden-import pystray._win32 --collect-all PIL livecatch.py
 if ($LASTEXITCODE -ne 0) { throw "LiveCatch GUI build failed." }
+
+$UiSmoke = Start-Process -FilePath (Join-Path $Root "dist\LiveCatch.exe") -ArgumentList "--ui-encoding-smoke" -Wait -PassThru
+if ($UiSmoke.ExitCode -ne 0) { throw "Packaged LiveCatch UI encoding smoke test failed (exit $($UiSmoke.ExitCode))." }
 & $Python -m PyInstaller --noconfirm --clean --onefile --windowed --name LiveCatchUpdater `
     livecatch_updater.py
 if ($LASTEXITCODE -ne 0) { throw "LiveCatch updater build failed." }
