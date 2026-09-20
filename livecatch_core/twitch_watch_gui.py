@@ -1,0 +1,276 @@
+"""Twitch watch-list view layered on the existing recording GUI."""
+from __future__ import annotations
+
+from dataclasses import replace
+import tkinter as tk
+from tkinter import messagebox, ttk
+
+from .config import Settings
+from .gui import LiveCatchApp
+from .tools import find_tool
+from .twitch_watch import WatchChannel, WatchConfig, WatchManager, WatchStore, normalize_channel, parse_channels
+from .updates import check_for_update
+
+STATUS = {
+    "idle": ("未開始", "Idle"), "waiting": ("監視待ち", "Waiting"),
+    "disabled": ("無効", "Disabled"), "checking": ("配信を確認中", "Checking"),
+    "offline": ("オフライン", "Offline"), "live": ("配信中", "Live"),
+    "recording": ("録画・結合中", "Recording / muxing"), "exporting": ("変換中", "Exporting"),
+    "queued": ("録画枠待ち", "Waiting for slot"), "manual": ("手動で録画中", "Manual recording"),
+    "check_error": ("確認エラー・再試行待ち", "Check error / backoff"),
+    "retry_wait": ("録画の再試行待ち", "Recording retry wait"),
+    "retry_limit": ("再試行上限・次の配信待ち", "Retry limit / next broadcast"),
+    "completed": ("録画完了", "Completed"), "skipped": ("今回の配信は終了・停止済み", "Broadcast completed / skipped"),
+    "stopping": ("停止処理中", "Stopping"), "paused": ("監視停止", "Paused"),
+}
+
+
+class TwitchWatchApp(LiveCatchApp):
+    def __init__(self, store=None, update_checker=check_for_update, watch_store=None, manager=None):
+        self.watch_store = watch_store or WatchStore()
+        self._watch_load_error = None
+        try:
+            self.watch_config = self.watch_store.load()
+        except (ValueError, OSError) as exc:
+            self.watch_config = WatchConfig()
+            self._watch_load_error = str(exc)
+        self._manual_login = None
+        self._manual_pending = None
+        self._watch_closing = False
+        self.watch_manager = manager or WatchManager(manual_channels=self._manual_channels)
+        self.watch_manager.configure(self.watch_config, Settings())
+        super().__init__(store=store, update_checker=update_checker)
+        self.watch_manager.configure(self.watch_config, self.settings())
+        if self._watch_load_error:
+            messagebox.showwarning("LiveCatch", self._t(
+                "自動録画設定を読み込めません。元ファイルは変更しません。\n",
+                "Cannot read watch settings; the original file was not changed.\n") + self._watch_load_error)
+        elif self.watch_config.autostart:
+            self.after(0, self._watch_start)
+
+    def _manual_channels(self):
+        channels = {self._manual_login} if self._manual_login and self.supervisor.active else set()
+        if self._manual_pending:
+            channels.add(self._manual_pending)
+        return channels
+
+    def _build(self):
+        super()._build()
+        if not hasattr(self, "watch_input"):
+            self.watch_input = tk.StringVar()
+            self.watch_interval = tk.StringVar(value=str(self.watch_config.interval))
+            self.watch_limit = tk.StringVar(value=str(self.watch_config.max_recordings))
+            self.watch_auto = tk.BooleanVar(value=self.watch_config.autostart)
+        frame = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(frame, text=self._t("Twitch自動録画", "Twitch auto-record"))
+        ttk.Label(frame, text=self._t("チャンネル名 / URL（空白・カンマで複数登録）",
+                                     "Channel names / URLs (space/comma separated)")).pack(anchor="w")
+        add = ttk.Frame(frame)
+        add.pack(fill="x", pady=(4, 6))
+        ttk.Entry(add, textvariable=self.watch_input).pack(side="left", fill="x", expand=True)
+        ttk.Button(add, text=self._t("追加", "Add"), command=self._watch_add).pack(side="left", padx=4)
+        tree_box = ttk.Frame(frame)
+        tree_box.pack(fill="x")
+        self.watch_tree = ttk.Treeview(tree_box, columns=("enabled", "status", "checked", "title"), height=6, selectmode="extended")
+        self.watch_tree.heading("#0", text=self._t("チャンネル", "Channel"))
+        self.watch_tree.column("#0", width=145, stretch=False)
+        for key, title, width in (("enabled", ("監視", "Enabled"), 55),
+                                  ("status", ("状態", "Status"), 215),
+                                  ("checked", ("最終確認", "Last check"), 80),
+                                  ("title", ("配信タイトル", "Stream title"), 250)):
+            self.watch_tree.heading(key, text=self._t(*title))
+            self.watch_tree.column(key, width=width, stretch=key == "title")
+        scroll = ttk.Scrollbar(tree_box, orient="vertical", command=self.watch_tree.yview)
+        scroll.pack(side="right", fill="y")
+        self.watch_tree.configure(yscrollcommand=scroll.set)
+        self.watch_tree.pack(side="left", fill="both", expand=True)
+        row = ttk.Frame(frame)
+        row.pack(fill="x", pady=5)
+        for title, command in ((("有効 / 無効", "Enable / disable"), self._watch_toggle),
+                               (("削除", "Remove"), self._watch_remove),
+                               (("選択の録画停止", "Stop selected recording"), self._watch_selected_stop),
+                               (("選択の強制停止", "Force stop selected"), lambda: self._watch_selected_stop(force=True)),
+                               (("選択を再試行", "Retry selected"), self._watch_retry)):
+            ttk.Button(row, text=self._t(*title), command=command).pack(side="left", padx=(0, 4))
+        limits = ttk.Frame(frame)
+        limits.pack(fill="x", pady=3)
+        ttk.Label(limits, text=self._t("確認間隔（秒）", "Check interval (s)")).pack(side="left")
+        ttk.Spinbox(limits, from_=30, to=3600, textvariable=self.watch_interval, width=7).pack(side="left", padx=(4, 12))
+        ttk.Label(limits, text=self._t("同時自動録画上限", "Max auto-recordings")).pack(side="left")
+        ttk.Combobox(limits, textvariable=self.watch_limit, values=tuple(range(1, 9)), state="readonly", width=4).pack(side="left", padx=4)
+        ttk.Checkbutton(limits, text=self._t("アプリ起動時に監視再開", "Monitor on app startup"), variable=self.watch_auto).pack(side="left", padx=8)
+        actions = ttk.Frame(frame)
+        actions.pack(fill="x", pady=4)
+        for title, command in ((("設定保存", "Save settings"), self._watch_save),
+                               (("監視開始", "Start monitoring"), self._watch_start),
+                               (("監視だけ停止", "Pause monitoring only"), self.watch_manager.stop),
+                               (("監視・全自動録画停止", "Stop monitoring and all auto-recordings"), self.watch_manager.shutdown)):
+            ttk.Button(actions, text=self._t(*title), command=command).pack(side="left", padx=(0, 4))
+        self.watch_summary = tk.StringVar()
+        ttk.Label(frame, textvariable=self.watch_summary).pack(anchor="w", pady=3)
+        self.watch_detail = tk.StringVar()
+        ttk.Label(frame, textvariable=self.watch_detail, wraplength=900).pack(anchor="w")
+        ttk.Label(frame, wraplength=900, text=self._t(
+            "アプリ・PCの起動中のみ監視。登録済み配信を検知時点から録画します。\n"
+            "画質・保存先・GPU設定は監視開始時の設定を使用。チャンネル編集は監視停止後に行ってください。",
+            "Requires the app/PC to remain running. Records from detection, not from an earlier VOD.\n"
+            "Uses quality/folder/GPU settings at monitor start. Pause monitoring before editing channels.")).pack(anchor="w", pady=(4, 0))
+        self._render_watch()
+
+    def _watch_values(self, channels=None):
+        return WatchConfig(self.watch_config.channels if channels is None else tuple(channels),
+                           int(self.watch_interval.get()), int(self.watch_limit.get()), bool(self.watch_auto.get()))
+
+    def _commit_watch_config(self, config):
+        config.validate()
+        settings = self.settings()
+        manager = self.watch_manager
+        if self._watch_closing or manager.running or any(s.probe for s in manager.states.values()):
+            raise ValueError(self._t("監視を停止し、確認処理の終了後に編集してください。", "Pause monitoring and wait for checks to stop before editing."))
+        if manager.recording_channels - {c.login for c in config.channels}:
+            raise ValueError(self._t("削除するチャンネルの録画を先に停止してください。", "Stop a channel's recording before removing it."))
+        self.watch_store.save(config)
+        manager.configure(config, settings)
+        self.watch_config = config
+        self._render_watch()
+
+    def _watch_add(self):
+        try:
+            names = parse_channels(self.watch_input.get())
+            existing = {c.login for c in self.watch_config.channels}
+            channels = self.watch_config.channels + tuple(WatchChannel(n) for n in names if n not in existing)
+            self._commit_watch_config(self._watch_values(channels))
+            self.watch_input.set("")
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("LiveCatch", str(exc))
+
+    def _watch_toggle(self):
+        try:
+            selected = set(self.watch_tree.selection())
+            channels = [replace(c, enabled=not c.enabled) if c.login in selected else c for c in self.watch_config.channels]
+            self._commit_watch_config(self._watch_values(channels))
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("LiveCatch", str(exc))
+
+    def _watch_remove(self):
+        try:
+            selected = set(self.watch_tree.selection())
+            self._commit_watch_config(self._watch_values(c for c in self.watch_config.channels if c.login not in selected))
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("LiveCatch", str(exc))
+
+    def _watch_save(self):
+        try:
+            self._commit_watch_config(self._watch_values())
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("LiveCatch", str(exc))
+
+    def _watch_start(self):
+        if self._watch_closing or self.watch_manager.running:
+            return
+        try:
+            if not find_tool("ffmpeg") or not find_tool("ffprobe"):
+                raise ValueError(self._t("ffmpegとffprobeを用意してください。", "ffmpeg and ffprobe are required."))
+            self._commit_watch_config(self._watch_values())
+            settings = self.settings()
+            if (settings.concurrent_fragments > 32 or settings.prefetch > 4 or settings.gpu_jobs > 4
+                    or settings.gpu_preset == "max_speed") and not messagebox.askyesno("LiveCatch", self._t(
+                "高負荷設定は同時録画本数ぶん適用されます。監視を開始しますか？",
+                "High-load settings apply to EACH concurrent recording. Start monitoring?")):
+                return
+            self.store.save(settings)
+            self.watch_manager.start()
+            self._render_watch()
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("LiveCatch", str(exc))
+
+    def _watch_selected_stop(self, *, force=False):
+        if force and not messagebox.askyesno("LiveCatch", self._t(
+                "未完成ファイルが残る場合があります。選択した自動録画を強制停止しますか？",
+                "Partial files may remain. Force-stop the selected auto-recordings?")):
+            return
+        for login in self.watch_tree.selection():
+            self.watch_manager.stop_recording(login, force=force)
+        self._render_watch()
+
+    def _watch_retry(self):
+        try:
+            for login in self.watch_tree.selection():
+                self.watch_manager.retry_channel(login)
+            self._render_watch()
+        except ValueError as exc:
+            messagebox.showerror("LiveCatch", str(exc))
+
+    def _render_watch(self):
+        if not hasattr(self, "watch_tree"):
+            return
+        manager = self.watch_manager
+        desired = {c.login for c in self.watch_config.channels}
+        for login in self.watch_tree.get_children():
+            if login not in desired:
+                self.watch_tree.delete(login)
+        for c in self.watch_config.channels:
+            state = manager.states.get(c.login)
+            status = state.status if state else "idle"
+            if not c.enabled and not (state and state.recording):
+                status = "disabled"
+            values = (self._t("有効", "Yes") if c.enabled else self._t("無効", "No"),
+                      self._t(*STATUS.get(status, (status, status))), state.checked if state else "",
+                      state.title if state else "")
+            if not self.watch_tree.exists(c.login):
+                self.watch_tree.insert("", "end", iid=c.login, text=c.login, values=values)
+            elif tuple(self.watch_tree.item(c.login, "values")) != values:
+                self.watch_tree.item(c.login, values=values)
+        mode = self._t("監視中", "Monitoring") if manager.running else self._t("監視停止", "Paused")
+        self.watch_summary.set(self._t(
+            f"{mode} / 登録 {len(desired)}件 / 自動録画 {len(manager.recording_channels)}/{manager.config.max_recordings}件",
+            f"{mode} / {len(desired)} channels / auto-recordings {len(manager.recording_channels)}/{manager.config.max_recordings}"))
+        selected = self.watch_tree.selection()
+        self.watch_detail.set(manager.states[selected[0]].detail if selected and selected[0] in manager.states else "")
+
+    def _start(self):
+        if self._watch_closing:
+            return
+        try:
+            login = normalize_channel(self.vars["url"].get())
+        except ValueError:
+            login = None
+        if login in self.watch_manager.recording_channels:
+            messagebox.showerror("LiveCatch", self._t("このチャンネルは自動録画中です。", "This channel is already being auto-recorded."))
+            return
+        was_active = self.supervisor.active
+        # Tk dialogs run a nested event loop: reserve the channel before the
+        # base Start handler opens the high-load confirmation dialog.
+        self._manual_pending = login
+        try:
+            super()._start()
+            if not was_active and self.supervisor.active:
+                self._manual_login = login
+        finally:
+            self._manual_pending = None
+
+    def _poll(self):
+        super()._poll()
+        self.watch_manager.tick()
+        for event in self.watch_manager.events.drain():
+            self._log(event["message"])
+        self._render_watch()
+        if self._watch_closing and not self.supervisor.active and not self.watch_manager.has_children:
+            self.destroy()
+
+    def _close(self):
+        if self.supervisor.active or self.watch_manager.has_children:
+            if messagebox.askyesno("LiveCatch", self._t(
+                    "監視と全録画を停止し、結合・終了処理が終わってから閉じますか？",
+                    "Stop monitoring and all recordings, then close after finalization?")):
+                self._watch_closing = True
+                self.watch_manager.shutdown()
+                self.supervisor.stop()
+                self.start_button.configure(state="disabled")
+            return
+        self.watch_manager.stop()
+        self.destroy()
+
+
+def main():
+    TwitchWatchApp().mainloop()

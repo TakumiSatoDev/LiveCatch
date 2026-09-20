@@ -16,3 +16,8 @@ with tempfile.TemporaryDirectory() as directory:
         assert app.winfo_width()>=840 and app.start_button.winfo_ismapped()
         print('Tk GUI smoke passed')
     finally:app.destroy()
+
+# Run the new watch UI tests under the same real Xvfb display.
+import subprocess
+subprocess.run([sys.executable, "-m", "pytest", "-q", "tests/test_twitch_watch_gui.py"],
+               cwd=Path(__file__).resolve().parents[1], check=True, timeout=60)

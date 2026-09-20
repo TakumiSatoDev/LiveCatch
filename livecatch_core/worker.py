@@ -7,6 +7,7 @@ from concurrent.futures import CancelledError
 from contextlib import nullcontext
 import _thread
 import json
+import re
 from pathlib import Path
 import sys
 from threading import Event, Thread
@@ -19,12 +20,14 @@ from .tools import find_tool
 from .ytdlp_patch import fragment_patch, ffmpeg_stop_bridge
 
 
-def record(settings: Settings, cancel: Event, emit) -> int:
+def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | None = None) -> int:
     import yt_dlp
     from yt_dlp.postprocessor.common import PostProcessor
     from yt_dlp.utils import PostProcessingError
 
     settings.validate()
+    if twitch_stream_id is not None and not re.fullmatch(r"[0-9]{1,32}", twitch_stream_id):
+        raise ValueError("Invalid expected Twitch broadcast ID")
     ffmpeg, ffprobe = find_tool("ffmpeg"), find_tool("ffprobe")
     if not ffmpeg or not ffprobe:
         raise RuntimeError("ffmpeg AND ffprobe are required in tools/ or PATH")
@@ -46,6 +49,12 @@ def record(settings: Settings, cancel: Event, emit) -> int:
         def run(self, info):
             if cancel.is_set():
                 raise KeyboardInterrupt()
+            if twitch_stream_id is not None and (
+                info.get("extractor_key") != "TwitchStream"
+                or info.get("is_live") is not True
+                or str(info.get("id", "")) != twitch_stream_id
+            ):
+                raise PostProcessingError("Twitch broadcast changed/ended after the check; waiting for a fresh check.")
             if settings.mode == "catchup_stop" and info.get("is_live"):
                 formats = info.get("requested_formats") or [info]
                 if info.get("extractor_key", "").lower() != "youtube" or any(
@@ -64,6 +73,9 @@ def record(settings: Settings, cancel: Event, emit) -> int:
             return [], info
 
     options = ydl_options(settings, ffmpeg)
+    if twitch_stream_id is not None:
+        options["live_from_start"] = False  # Record live HLS, never an associated growing VOD.
+        options.pop("wait_for_video", None)  # Do not wait for a DIFFERENT broadcast after a race.
     options["logger"] = Logger()
     def progress(p):
         if cancel.is_set() and p.get("status") == "downloading" and (
@@ -115,6 +127,9 @@ def record(settings: Settings, cancel: Event, emit) -> int:
 
 
 def main() -> int:
+    if sys.argv[1:] == ["--twitch-probe"]:
+        from .twitch_watch_probe import main as probe_main
+        return probe_main()
     emit = Emitter(sys.stdout)
     cancel = Event()
     phase = {"name": "starting"}
@@ -125,6 +140,10 @@ def main() -> int:
         emit(kind, **data)
 
     try:
+        args = sys.argv[1:]
+        if args and (len(args) != 2 or args[0] != "--twitch-watch-record"):
+            raise ValueError("Unknown worker arguments")
+        expected_stream = args[1] if args else None
         settings = Settings.from_dict(json.loads(sys.stdin.readline()))
 
         def control():
@@ -144,7 +163,7 @@ def main() -> int:
             cancel.set()  # Parent disappeared; don't continue new native fragments.
 
         Thread(target=control, daemon=True, name="lc-control").start()
-        code = record(settings, cancel, publish)
+        code = record(settings, cancel, publish, twitch_stream_id=expected_stream)
         status = "completed" if code == 0 else "cancelled" if code == 130 else "failed"
     except (KeyboardInterrupt, CancelledError):
         code, status = 130, "cancelled"

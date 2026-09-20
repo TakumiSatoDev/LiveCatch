@@ -32,7 +32,7 @@ def main():
     emit, cancel = Emitter(sys.stdout), Event()
     try:
         if args.command == "gui":
-            from .gui import main as gui
+            from .twitch_watch_gui import main as gui
             gui()
             return 0
         ffmpeg, ffprobe = find_tool("ffmpeg"), find_tool("ffprobe")
