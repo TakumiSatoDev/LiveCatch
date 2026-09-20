@@ -33,6 +33,10 @@ def run_contract(monkeypatch, tmp_path, info, expected, *, live_from_start=False
     monkeypatch.setattr(worker, 'ffmpeg_stop_bridge', lambda *a,**k:nullcontext())
     monkeypatch.setattr(worker, 'fragment_patch', lambda *a,**k:nullcontext())
     monkeypatch.setattr(worker, 'find_tool', lambda x:'/fake/'+x)
+    if live_from_start and expected is not None:
+        monkeypatch.setattr(
+            'livecatch_core.twitch_watch_probe.probe_channel',
+            lambda _settings: {'status':'live','stream_id':expected,'title':'verified'})
     settings = Settings(url='https://twitch.tv/example', save_dir=str(tmp_path),
                         live_from_start=live_from_start)
     def run(): return worker.record(settings, Event(), lambda *a,**k:None, twitch_stream_id=expected)
@@ -53,6 +57,14 @@ def test_live_watch_can_catch_up_when_requested(monkeypatch, tmp_path):
         live_from_start=True)
     assert run() == 0 and observed['download_started']
     assert observed['live_from_start'] is True and 'wait_for_video' not in observed
+
+
+def test_twitch_catchup_accepts_preverified_associated_vod(monkeypatch, tmp_path):
+    observed, run, _ = run_contract(
+        monkeypatch, tmp_path,
+        {'extractor_key':'TwitchVod', 'is_live':True, 'id':'9999'}, '1234',
+        live_from_start=True)
+    assert run() == 0 and observed['download_started']
 
 
 @pytest.mark.parametrize('info', [
