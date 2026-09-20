@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.3.1
+
+### Changed
+
+- Experimental fragment concurrency now supports 192 and 256 workers in the desktop GUI.
+- Monitoring adds `ultra` (192) and `experimental_256` (256) presets while preserving the existing 128-worker `max` preset.
+- Existing defaults remain unchanged; 192/256 remain explicit high-load choices.
 ## v3.3.0
 
 ### Added
