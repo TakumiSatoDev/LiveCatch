@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.0.1
+
+### Fixed
+
+- Clicking the update status now retries the update check when the app is up to date or the network check failed.
+- The update notification now reports the release version and provides a clear action for opening the release page.
+
+### Improved
+
+- Recording progress now shows a visual phase pipeline, percentage, stream details, byte/fragment progress, and export counts.
+
 ## v3.0.0
 
 ### Added

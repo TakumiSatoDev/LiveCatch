@@ -28,6 +28,13 @@ PHASE_LABELS = {
     "exporting": ("動画を変換中", "Exporting video"),
     "done": ("完了", "Completed"),
 }
+PROGRESS_PHASES = ("starting", "extracting", "downloading", "postprocessing", "exporting", "done")
+PROGRESS_COLORS = {
+    "idle": ("#e9eef2", "#52606d"),
+    "active": ("#1769aa", "#ffffff"),
+    "done": ("#2e7d32", "#ffffff"),
+    "error": ("#b3261e", "#ffffff"),
+}
 
 LABELS = {
     "mode": ("録画モード", "Recording mode"), "url": ("YouTube / Twitch URL", "YouTube / Twitch URL"),
@@ -78,6 +85,7 @@ class LiveCatchApp(tk.Tk):
         }
         self._update_checker = update_checker
         self._update_info: UpdateCheck | None = None
+        self._update_checking = False
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(100, self._poll)
@@ -93,9 +101,9 @@ class LiveCatchApp(tk.Tk):
         header.pack(fill="x")
         ttk.Label(header, text=f"LiveCatch {__version__}", font=("", 20, "bold")).pack(side="left")
         self.update_var = tk.StringVar(value=self._t("更新を確認中…", "Checking for updates…"))
-        self.update_label = ttk.Label(header, textvariable=self.update_var, cursor="hand2")
-        self.update_label.pack(side="right", padx=(8, 0))
-        self.update_label.bind("<Button-1>", lambda _event: self._open_update())
+        self.update_button = ttk.Button(header, textvariable=self.update_var, command=self._open_update)
+        self.update_button.pack(side="right", padx=(8, 0))
+        self.update_button.configure(state="disabled" if self._update_checking else "normal")
         if self._update_info is not None:
             self._apply_update_result(self._update_info)
         lang = ttk.Combobox(header, textvariable=self.vars["language"], values=("ja", "en"), state="readonly", width=5)
@@ -136,14 +144,34 @@ class LiveCatchApp(tk.Tk):
                   ).pack(anchor="w", pady=(0, 8))
         status = ttk.LabelFrame(self.body, text=self._t("進行状況", "Progress"), padding=8)
         status.pack(fill="x", pady=(0, 8))
+        status.columnconfigure(0, weight=1)
         status.columnconfigure(1, weight=1)
         ttk.Label(status, text=self._t("状態", "Status")).grid(row=0, column=0, sticky="w", padx=(0, 12))
         self.phase_var = tk.StringVar()
         ttk.Label(status, textvariable=self.phase_var).grid(row=0, column=1, sticky="w")
-        self.progressbar = ttk.Progressbar(status, mode="indeterminate", maximum=100)
-        self.progressbar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 2))
+        pipeline = tk.Frame(status, bd=0, highlightthickness=0)
+        pipeline.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(7, 3))
+        self.phase_steps = {}
+        for index, phase in enumerate(PROGRESS_PHASES):
+            if index:
+                tk.Label(pipeline, text="›", width=2, fg="#7b8794").pack(side="left")
+            step = tk.Label(pipeline, text=self._phase_text(phase), anchor="center", width=14,
+                            padx=5, pady=5, relief="ridge", bd=1, font=("", 9, "bold"))
+            step.pack(side="left", fill="x", expand=True)
+            self.phase_steps[phase] = step
+        meter = ttk.Frame(status)
+        meter.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(3, 2))
+        meter.columnconfigure(0, weight=1)
+        self.progressbar = ttk.Progressbar(meter, mode="indeterminate", maximum=100)
+        self.progressbar.grid(row=0, column=0, sticky="ew")
+        self.percent_var = tk.StringVar()
+        ttk.Label(meter, textvariable=self.percent_var, width=8, anchor="e").grid(row=0, column=1, padx=(8, 0))
+        self.metrics_var = tk.StringVar()
+        ttk.Label(status, textvariable=self.metrics_var, wraplength=960).grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
         self.detail_var = tk.StringVar()
-        ttk.Label(status, textvariable=self.detail_var).grid(row=2, column=0, columnspan=2, sticky="w")
+        ttk.Label(status, textvariable=self.detail_var, wraplength=960).grid(
+            row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
         self._render_progress()
         bar = ttk.Frame(self.body)
         bar.pack(fill="x")
@@ -261,37 +289,54 @@ class LiveCatchApp(tk.Tk):
         self.destroy()
 
     def _check_updates(self):
+        if self._update_checking:
+            return
+        self._update_checking = True
+        self.update_var.set(self._t("更新を確認中…", "Checking for updates…"))
+        self.update_button.configure(state="disabled")
+
         def work():
             try:
                 result = self._update_checker(__version__)
             except Exception:
                 result = None
             try:
-                self.after(0, lambda: self._apply_update_result(result))
+                self.after(0, lambda: self._finish_update_check(result))
             except RuntimeError:
                 pass
 
         Thread(target=work, daemon=True, name="lc-update-check").start()
 
+    def _finish_update_check(self, result: UpdateCheck | None):
+        self._update_checking = False
+        self._apply_update_result(result)
+        self.update_button.configure(state="normal")
+
     def _apply_update_result(self, result: UpdateCheck | None):
         self._update_info = result
         if result is None:
-            self.update_var.set(self._t("更新確認できません", "Update check unavailable"))
+            self.update_var.set(self._t("更新確認できません（クリックで再試行）", "Update check unavailable (click to retry)"))
         elif result.update_available:
             self.update_var.set(self._t(
                 f"アップデートあり: v{result.latest_version}",
                 f"Update available: v{result.latest_version}"))
         else:
-            self.update_var.set(self._t("最新です", "Up to date"))
+            self.update_var.set(self._t(
+                f"最新です v{result.latest_version}（クリックで再確認）",
+                f"Up to date v{result.latest_version} (click to recheck)"))
 
     def _open_update(self):
+        if self._update_checking:
+            return
         if self._update_info and self._update_info.update_available:
             webbrowser.open(self._update_info.url)
+        else:
+            self._check_updates()
 
     def _reset_progress(self):
         self._progress = {
             "phase": "starting", "active": False, "streams": {}, "detail": "",
-            "export_current": 0, "export_total": 0, "outputs": 0,
+            "last_phase": "starting", "export_current": 0, "export_total": 0, "outputs": 0,
         }
         self._render_progress()
 
@@ -303,6 +348,7 @@ class LiveCatchApp(tk.Tk):
         kind = event.get("event")
         if kind == "phase":
             self._progress["phase"] = event.get("name", "starting")
+            self._progress["last_phase"] = self._progress["phase"]
         elif kind == "progress":
             stream = event.get("stream", "media")
             state = self._progress["streams"].setdefault(stream, {})
@@ -328,6 +374,7 @@ class LiveCatchApp(tk.Tk):
                 f"Saved {self._progress['outputs']}: {event.get('path', '')}")
         elif kind == "export_batch":
             self._progress["phase"] = "exporting"
+            self._progress["last_phase"] = "exporting"
             self._progress["export_current"] = event.get("current", 0)
             self._progress["export_total"] = event.get("total", 0)
             self._progress["detail"] = self._t(
@@ -352,6 +399,22 @@ class LiveCatchApp(tk.Tk):
             return
         phase = self._progress.get("phase", "starting")
         self.phase_var.set(self._phase_text(phase))
+        current_phase = phase if phase in PROGRESS_PHASES else self._progress.get("last_phase", "starting")
+        current_index = PROGRESS_PHASES.index(current_phase)
+        error_state = phase in {"failed", "cancelled", "forced"}
+        for index, step_phase in enumerate(PROGRESS_PHASES):
+            if error_state and step_phase == current_phase:
+                state = "error"
+            elif phase == "done" or index < current_index:
+                state = "done"
+            elif index == current_index:
+                state = "active"
+            else:
+                state = "idle"
+            background, foreground = PROGRESS_COLORS[state]
+            step = self.phase_steps[step_phase]
+            step.configure(text=("✓ " if state == "done" else "▶ " if state == "active" else "") + self._phase_text(step_phase),
+                           bg=background, fg=foreground)
         detail = self._progress.get("detail", "")
         if not detail:
             known = []
@@ -374,15 +437,55 @@ class LiveCatchApp(tk.Tk):
         if isinstance(self._progress.get("percent"), (int, float)):
             percent_values = [self._progress["percent"]]
         if percent_values:
+            self.percent_var.set(f"{min(percent_values):.0f}%")
             self.progressbar.stop()
             self.progressbar.configure(mode="determinate", maximum=100, value=min(percent_values))
         elif self._progress.get("active"):
+            self.percent_var.set("—")
             if self.progressbar.cget("mode") != "indeterminate":
                 self.progressbar.configure(mode="indeterminate")
                 self.progressbar.start(10)
         else:
+            self.percent_var.set("0%")
             self.progressbar.stop()
             self.progressbar.configure(mode="determinate", maximum=100, value=0)
+        self.metrics_var.set(self._progress_summary())
+
+    @staticmethod
+    def _format_bytes(value) -> str:
+        if not isinstance(value, (int, float)) or value < 0:
+            return "?"
+        size = float(value)
+        for unit in ("B", "KiB", "MiB", "GiB"):
+            if size < 1024 or unit == "GiB":
+                return f"{size:.1f} {unit}" if unit != "B" else f"{size:.0f} B"
+            size /= 1024
+        return "?"
+
+    def _progress_summary(self) -> str:
+        parts = []
+        for stream, state in sorted(self._progress.get("streams", {}).items()):
+            label = str(stream)
+            percent = state.get("percent")
+            if isinstance(percent, (int, float)):
+                label += f" {float(percent):.1f}%"
+            fragment_index, fragment_count = state.get("fragment_index"), state.get("fragment_count")
+            if isinstance(fragment_index, int) and isinstance(fragment_count, int) and fragment_count > 0:
+                label += f" ({fragment_index}/{fragment_count} fragments)"
+            elif isinstance(state.get("downloaded_bytes"), int):
+                downloaded = self._format_bytes(state["downloaded_bytes"])
+                total = self._format_bytes(state.get("total_bytes"))
+                label += f" ({downloaded}/{total})"
+            if isinstance(state.get("speed"), (int, float)) and state["speed"] > 0:
+                label += f" @ {self._format_bytes(state['speed'])}/s"
+            parts.append(label)
+        if self._progress.get("outputs"):
+            parts.append(self._t(f"保存済み {self._progress['outputs']}件", f"Saved {self._progress['outputs']}"))
+        if self._progress.get("export_total"):
+            parts.append(self._t(
+                f"変換 {self._progress['export_current']}/{self._progress['export_total']}",
+                f"Export {self._progress['export_current']}/{self._progress['export_total']}"))
+        return "  •  ".join(parts) or self._t("まだ進行情報はありません", "No progress data yet")
 
     def _poll(self):
         events = self.supervisor.events.drain()
