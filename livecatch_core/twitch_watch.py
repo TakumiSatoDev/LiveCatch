@@ -29,6 +29,14 @@ MAX_CHANNELS = 50
 MAX_PROBES = 2
 PROBE_TIMEOUT = 45.0
 MAX_ATTEMPTS = 3
+MONITOR_PRESETS = {
+    "manual": None,
+    "balanced": (32, 3, 2, "balanced"),
+    "fast": (64, 4, 3, "fast"),
+    "extreme": (96, 6, 4, "fast"),
+    "max": (128, 8, 6, "max_speed"),
+}
+CATCHUP_MODES = ("from_start", "live_edge")
 _RESERVED = {"videos", "directory", "downloads", "settings", "inventory", "subscriptions",
              "search", "login", "signup", "p", "jobs", "wallet", "friends", "turbo", "drops"}
 
@@ -68,6 +76,8 @@ class WatchConfig:
     interval: int = 60
     max_recordings: int = 3
     autostart: bool = False
+    monitor_preset: str = "manual"
+    catchup_mode: str = "from_start"
     schema_version: int = 1
 
     def validate(self) -> None:
@@ -79,6 +89,10 @@ class WatchConfig:
             raise ValueError("Concurrent automatic recordings must be 1..8")
         if type(self.autostart) is not bool:
             raise ValueError("Invalid autostart flag")
+        if self.monitor_preset not in MONITOR_PRESETS:
+            raise ValueError("Invalid monitoring preset")
+        if self.catchup_mode not in CATCHUP_MODES:
+            raise ValueError("Invalid monitoring catch-up mode")
         if not isinstance(self.channels, tuple) or len(self.channels) > MAX_CHANNELS:
             raise ValueError(f"Register at most {MAX_CHANNELS} channels")
         seen = set()
@@ -99,7 +113,8 @@ class WatchConfig:
                 raise ValueError("Invalid watch channel")
             channels.append(WatchChannel(normalize_target(item.get("login")), item.get("enabled", True)))
         result = cls(tuple(channels), data.get("interval", 60), data.get("max_recordings", 3),
-                     data.get("autostart", False), data.get("schema_version", 1))
+                     data.get("autostart", False), data.get("monitor_preset", "manual"),
+                     data.get("catchup_mode", "from_start"), data.get("schema_version", 1))
         result.validate()
         return result
 
@@ -131,9 +146,20 @@ class WatchStore:
             Path(name).unlink(missing_ok=True)
 
 
-def channel_settings(base: Settings, login: str, stream_id: str | None = None) -> Settings:
+def apply_monitor_preset(base: Settings, preset: str) -> Settings:
+    if preset not in MONITOR_PRESETS:
+        raise ValueError("Invalid monitoring preset")
+    values = MONITOR_PRESETS[preset]
+    if values is None:
+        return base
+    fragments, prefetch, gpu_jobs, gpu_preset = values
+    return replace(base, concurrent_fragments=fragments, prefetch=prefetch,
+                   gpu_jobs=gpu_jobs, gpu_preset=gpu_preset)
+
+
+def channel_settings(base: Settings, login: str, stream_id: str | None = None, *, catchup: bool = False) -> Settings:
     login = normalize_target(login)
-    settings = replace(base, url=target_url(login), mode="reservation", live_from_start=False)
+    settings = replace(base, url=target_url(login), mode="reservation", live_from_start=bool(catchup))
     if stream_id is not None:
         if not valid_broadcast_id(login, stream_id):
             raise ValueError("Missing/invalid broadcast ID")
@@ -184,6 +210,7 @@ class ChannelState:
     retry_at: float = 0.0
     probe: Job | None = None
     recording: Job | None = None
+    last_elapsed: float = 0.0
 
 
 class WatchManager:
@@ -217,6 +244,38 @@ class WatchManager:
             raise ValueError("Stop a channel's recording before removing it")
         self.config, self.settings = config, settings
         self.states = {c.login: self.states.get(c.login, ChannelState()) for c in config.channels}
+
+    def add_channels(self, channels: tuple[WatchChannel, ...], settings: Settings) -> None:
+        """Add registrations while monitoring without disturbing existing jobs."""
+        if not channels:
+            return
+        settings.validate(require_url=False)
+        existing = {c.login for c in self.config.channels}
+        additions = []
+        for channel in channels:
+            if not isinstance(channel, WatchChannel):
+                raise ValueError("Invalid watch channel")
+            if channel.login in existing:
+                continue
+            additions.append(channel)
+            existing.add(channel.login)
+        config = replace(self.config, channels=self.config.channels + tuple(additions))
+        config.validate()
+        self.config, self.settings = config, settings
+        now = self.clock()
+        for i, channel in enumerate(additions):
+            state = ChannelState()
+            state.next_check = now + i * 0.05
+            state.status = "waiting" if channel.enabled else "disabled"
+            self.states[channel.login] = state
+            self._log(channel.login, "Registration added; checking the current broadcast immediately")
+        # If monitoring is paused, additions are simply persisted for the next start.
+
+    def elapsed_seconds(self, login: str) -> float:
+        state = self.states[login]
+        if state.recording is not None:
+            return max(0.0, self.clock() - state.recording.started)
+        return max(0.0, state.last_elapsed)
 
     def start(self) -> None:
         if self.running:
@@ -357,6 +416,7 @@ class WatchManager:
         if not self._finished(job):
             return
         s.recording = None
+        s.last_elapsed = max(0.0, now - job.started)
         result = job.terminal.get("status", "failed")
         if result in ("completed", "cancelled", "forced") or s.suppressed_id == s.stream_id:
             s.suppressed_id = s.stream_id
@@ -367,7 +427,7 @@ class WatchManager:
             s.status = "retry_limit" if s.attempts >= MAX_ATTEMPTS else "retry_wait"
         s.online = False
         s.next_check = now + self.config.interval
-        self._log(login, f"Recording {result}; waiting for the next eligible broadcast/check")
+        self._log(login, f"Recording {result} after {s.last_elapsed:.1f}s; waiting for the next eligible broadcast/check")
 
     def tick(self) -> None:
         now = self.clock()
@@ -400,7 +460,10 @@ class WatchManager:
                     try:
                         s.attempts += 1
                         worker = self.factory("youtube_record" if is_youtube(c.login) else "record", s.stream_id)
-                        worker.start(channel_settings(self.settings, c.login, s.stream_id))
+                        worker.start(channel_settings(
+                            self.settings, c.login, s.stream_id,
+                            catchup=self.config.catchup_mode == "from_start",
+                        ))
                         s.recording = Job(worker, now, self.generation)
                         s.status = "recording"
                         self._log(c.login, f"Started broadcast {s.stream_id} (attempt {s.attempts}/{MAX_ATTEMPTS})")
