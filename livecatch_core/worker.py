@@ -87,8 +87,11 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
 
     options = ydl_options(settings, ffmpeg)
     if twitch_stream_id is not None or youtube_video_id is not None:
-        options["live_from_start"] = False  # Record live HLS, never an associated growing VOD.
-        options.pop("wait_for_video", None)  # Do not wait for a DIFFERENT broadcast after a race.
+        # Monitoring decides whether to catch up from the available DVR/start or
+        # join the live edge. Never wait for a different future broadcast after
+        # we have already validated an exact broadcast identity.
+        options["live_from_start"] = settings.live_from_start
+        options.pop("wait_for_video", None)
     options["logger"] = Logger()
     def progress(p):
         if cancel.is_set() and p.get("status") == "downloading" and (
