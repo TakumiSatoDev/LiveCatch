@@ -43,7 +43,7 @@ def fragment_patch(cancel: Event, *, prefetch: int = 2, snapshot: bool = False,
 
 
 @contextmanager
-def _patch_class(cls, cancel: Event, *, prefetch: int, snapshot: bool, catchup: bool, emit):
+def _patch_class(cls, cancel: Event, *, prefetch: int, snapshot: bool, emit, catchup: bool = False):
     original = cls.download_and_append_fragments
     multiple = cls.download_and_append_fragments_multiple
     append = cls._append_fragment
