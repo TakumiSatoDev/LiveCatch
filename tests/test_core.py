@@ -95,8 +95,11 @@ def test_emitter_redacts_and_throttles():
     out=StringIO();emit=Emitter(out)
     emit('warning',message='https://host/file?token=secret')
     for _ in range(100):emit('fragment',stream='video',current=2)
+    for _ in range(100):emit('catchup',stream='video',percent=50,caught_up=False)
+    emit('catchup',stream='video',percent=100,caught_up=True)
     events=[json.loads(x) for x in out.getvalue().splitlines()]
-    assert len(events)==2 and 'secret' not in out.getvalue()
+    assert len(events)==4 and 'secret' not in out.getvalue()
+    assert events[-1]['event']=='catchup' and events[-1]['caught_up'] is True
     assert redact('no URL')=='no URL'
 
 @pytest.mark.parametrize('version', ['2026.08.19','2026.8.19'])
