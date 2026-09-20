@@ -66,10 +66,14 @@ def test_monitor_presets_are_separate_from_manual_settings():
     fast=apply_monitor_preset(base,'fast')
     extreme=apply_monitor_preset(base,'extreme')
     maximum=apply_monitor_preset(base,'max')
+    ultra=apply_monitor_preset(base,'ultra')
+    experimental=apply_monitor_preset(base,'experimental_256')
     assert (base.concurrent_fragments,base.prefetch)==(8,2)
     assert (fast.concurrent_fragments,fast.prefetch,fast.gpu_export)==(64,4,'off')
     assert (extreme.concurrent_fragments,extreme.prefetch,extreme.gpu_export)==(96,6,'off')
     assert (maximum.concurrent_fragments,maximum.prefetch,maximum.gpu_export)==(128,8,'off')
+    assert (ultra.concurrent_fragments,ultra.prefetch,ultra.gpu_export)==(192,8,'off')
+    assert (experimental.concurrent_fragments,experimental.prefetch,experimental.gpu_export)==(256,8,'off')
     assert apply_monitor_preset(base,'manual').gpu_export=='off'
 
 
