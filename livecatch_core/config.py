@@ -79,6 +79,9 @@ class Settings:
                 raise ValueError(f"Invalid type for {f.name}")
             clean[f.name] = value
         clean["schema_version"] = 3
+        # Automatic recording/export in the desktop app is now always stream-copy only.
+        # Keep legacy fields readable for backwards compatibility and the standalone export CLI.
+        clean["gpu_export"] = "off"
         if clean["output_template"] in (LEGACY_DEFAULT_TEMPLATE_V2, LEGACY_DEFAULT_TEMPLATE_V3):
             clean["output_template"] = DEFAULT_TEMPLATE
         result = cls(**clean)
