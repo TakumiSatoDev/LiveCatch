@@ -15,6 +15,52 @@ New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+function Download-FileWithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    $temporary = "$Destination.download"
+    if (Test-Path $temporary) {
+        Remove-Item $temporary -Force
+    }
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        & $curl.Source --location --fail --show-error --retry 5 --retry-delay 5 `
+            --retry-all-errors --connect-timeout 30 --max-time 900 --output $temporary $Uri
+        if ($LASTEXITCODE -ne 0) {
+            throw "Download failed with curl (exit code $LASTEXITCODE): $Uri"
+        }
+    } else {
+        $downloaded = $false
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+                Invoke-WebRequest -Uri $Uri -OutFile $temporary -TimeoutSec 900
+                $downloaded = $true
+                break
+            } catch {
+                if ($attempt -eq 5) {
+                    throw
+                }
+                Write-Warning "Download attempt $attempt failed; retrying: $($_.Exception.Message)"
+                Start-Sleep -Seconds ([Math]::Min(30, $attempt * 5))
+            }
+        }
+        if (-not $downloaded) {
+            throw "Download failed: $Uri"
+        }
+    }
+
+    if (-not (Test-Path $temporary) -or (Get-Item $temporary).Length -eq 0) {
+        throw "Downloaded file is empty: $Uri"
+    }
+    Move-Item $temporary $Destination -Force
+}
+
 $YtDlpUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
 $YtDlpPath = Join-Path $ToolsDir "yt-dlp.exe"
 
@@ -25,7 +71,7 @@ if (Test-Path $YtDlpPath) {
 } else {
     Write-Host ""
     Write-Host "Downloading yt-dlp..."
-    Invoke-WebRequest -Uri $YtDlpUrl -OutFile $YtDlpPath
+    Download-FileWithRetry -Uri $YtDlpUrl -Destination $YtDlpPath
 }
 
 $FfmpegPath = Join-Path $ToolsDir "ffmpeg.exe"
@@ -48,7 +94,7 @@ if (-not $NeedsFfmpegInstall) {
 
     Write-Host ""
     Write-Host "Downloading ffmpeg..."
-    Invoke-WebRequest -Uri $FfmpegZipUrl -OutFile $FfmpegZipPath
+    Download-FileWithRetry -Uri $FfmpegZipUrl -Destination $FfmpegZipPath
 
     Write-Host "Extracting ffmpeg..."
     if (Test-Path $FfmpegExtractDir) {
@@ -83,7 +129,7 @@ if (Test-Path $DenoPath) {
     New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
     Write-Host ""
     Write-Host "Downloading deno..."
-    Invoke-WebRequest -Uri $DenoZipUrl -OutFile $DenoZipPath
+    Download-FileWithRetry -Uri $DenoZipUrl -Destination $DenoZipPath
     Expand-Archive -Path $DenoZipPath -DestinationPath $DenoExtractDir -Force
     $DenoExe = Get-ChildItem -Path $DenoExtractDir -Recurse -Filter "deno.exe" | Select-Object -First 1
     if (-not $DenoExe) {

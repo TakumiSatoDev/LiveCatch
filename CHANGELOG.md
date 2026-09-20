@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.0.2
+
+### Fixed
+
+- Runtime tool downloads now use curl retries and atomic temporary files so transient FFmpeg/GitHub download failures do not abort release builds.
+
 ## v3.0.1
 
 ### Fixed
