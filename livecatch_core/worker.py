@@ -137,8 +137,11 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
     deno = find_tool("deno")
     if deno:
         options["js_runtimes"] = {"deno": {"path": deno}}
-    adapter = fragment_patch(cancel, prefetch=settings.prefetch,
-                             snapshot=settings.mode == "catchup_stop", emit=emit)
+    adapter = fragment_patch(
+        cancel, prefetch=settings.prefetch,
+        snapshot=settings.mode == "catchup_stop",
+        catchup=settings.live_from_start and settings.mode != "catchup_stop",
+        emit=emit)
     emit("phase", name="extracting")
     with ffmpeg_stop_bridge(cancel), (adapter if settings.engine == "bounded" else nullcontext()):
         with yt_dlp.YoutubeDL(options) as ydl:
