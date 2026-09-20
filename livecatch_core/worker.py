@@ -108,7 +108,8 @@ def record(settings: Settings, cancel: Event, emit) -> int:
     if settings.gpu_export != "off":
         emit("phase", name="exporting")
         export_batch(outputs, ExportOptions(settings.gpu_export, settings.export_height,
-                                            settings.gpu_device, settings.gpu_jobs),
+                                            settings.gpu_device, settings.gpu_jobs,
+                                            settings.gpu_preset),
                      ffmpeg, ffprobe, cancel, emit)
     return 0
 
