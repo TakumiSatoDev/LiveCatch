@@ -1,4 +1,9 @@
 @echo off
+setlocal
 cd /d "%~dp0"
-python livecatch.py
-pause
+if exist ".venv\Scripts\python.exe" (
+    ".venv\Scripts\python.exe" livecatch.py
+) else (
+    python livecatch.py
+)
+endlocal

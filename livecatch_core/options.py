@@ -1,0 +1,51 @@
+"""Pure mapping from application settings to the documented Python API."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from .config import QUALITY, Settings
+
+
+def ydl_options(settings: Settings, ffmpeg: str | None = None) -> dict:
+    settings.validate()
+    paths = {"home": str(Path(settings.save_dir).expanduser())}
+    if settings.use_temp_dir:
+        paths["temp"] = str(Path(settings.temp_dir).expanduser())
+    processors = [{"key": "FFmpegVideoRemuxer", "preferedformat": settings.output_format}]
+    if settings.embed_metadata and not (
+        settings.mode == "catchup_stop" and settings.lightweight_catchup_postprocess
+    ):
+        processors.append({"key": "FFmpegMetadata", "add_metadata": True})
+    result = {
+        "format": QUALITY[settings.quality_preset],
+        "paths": paths,
+        "outtmpl": settings.output_template,
+        "merge_output_format": settings.output_format,
+        "postprocessors": processors,
+        "concurrent_fragment_downloads": settings.concurrent_fragments,
+        "live_from_start": settings.live_from_start or settings.mode != "reservation",
+        "writeinfojson": settings.write_info_json,
+        "noplaylist": True,
+        "continuedl": True,
+        "overwrites": False,
+        "skip_unavailable_fragments": False,
+        "retries": 3,
+        "fragment_retries": 3,
+        "file_access_retries": 3,
+        "socket_timeout": 10,
+        "quiet": True,
+        "noprogress": True,
+        "windowsfilenames": os.name == "nt",
+        "retry_sleep_functions": {
+            "http": lambda n: min(2 ** n, 30),
+            "fragment": lambda n: min(2 ** n, 30),
+        },
+    }
+    if settings.mode == "reservation":
+        result["wait_for_video"] = (settings.wait_seconds, settings.wait_seconds)
+    if settings.cookies_from_browser:
+        result["cookiesfrombrowser"] = (settings.browser,)
+    if ffmpeg:
+        result["ffmpeg_location"] = str(Path(ffmpeg).parent)
+    return result

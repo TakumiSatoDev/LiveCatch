@@ -1,1 +1,2 @@
-pyinstaller
+# Private yt-dlp adapters are reviewed against this exact stable release.
+yt-dlp[default]==2026.8.19
