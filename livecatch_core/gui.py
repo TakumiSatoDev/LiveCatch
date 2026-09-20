@@ -85,8 +85,8 @@ class LiveCatchApp(tk.Tk):
         self.closing = False
         self._progress = {
             "phase": "starting", "active": False, "streams": {}, "detail": "",
-            "export_current": 0, "export_total": 0, "outputs": 0,
-            "started_at": None, "elapsed": None,
+            "outputs": 0, "started_at": None, "elapsed": None,
+            "catchup": {}, "caught_up": False, "stream_count": 0,
         }
         self._update_checker = update_checker
         self._update_info: UpdateCheck | None = None
@@ -450,8 +450,9 @@ class LiveCatchApp(tk.Tk):
     def _reset_progress(self):
         self._progress = {
             "phase": "starting", "active": False, "streams": {}, "detail": "",
-            "last_phase": "starting", "export_current": 0, "export_total": 0, "outputs": 0,
+            "last_phase": "starting", "outputs": 0,
             "started_at": None, "elapsed": None,
+            "catchup": {}, "caught_up": False, "stream_count": 0,
         }
         self._render_progress()
 
@@ -477,7 +478,38 @@ class LiveCatchApp(tk.Tk):
             state = self._progress["streams"].setdefault(stream, {})
             state.update(event)
             self._progress["detail"] = stream
+        elif kind == "catchup":
+            stream = event.get("stream", "media")
+            state = self._progress["catchup"].setdefault(stream, {})
+            state.update(event)
+            expected = int(self._progress.get("stream_count") or 0)
+            catchup_states = list(self._progress["catchup"].values())
+            self._progress["caught_up"] = bool(
+                catchup_states
+                and (not expected or len(catchup_states) >= expected)
+                and all(item.get("caught_up") is True for item in catchup_states)
+            )
+            if self._progress["caught_up"]:
+                self._progress["detail"] = self._t(
+                    "ライブ位置まで追いつきました。通常録画を継続中",
+                    "Caught up to the live edge; continuing normal recording")
+            else:
+                percentages = [float(item["percent"]) for item in catchup_states
+                               if isinstance(item.get("percent"), (int, float))]
+                gaps = [int(item["gap_fragments"]) for item in catchup_states
+                        if isinstance(item.get("gap_fragments"), int)]
+                percent = min(percentages) if percentages else None
+                gap = max(gaps) if gaps else None
+                if percent is not None:
+                    suffix = f" / 残り約{gap} fragments" if gap is not None else ""
+                    suffix_en = f" / about {gap} fragments left" if gap is not None else ""
+                    self._progress["detail"] = self._t(
+                        f"ライブへ追いつき中 {percent:.1f}%{suffix}",
+                        f"Catching up to live {percent:.1f}%{suffix_en}")
         elif kind == "streams":
+            count = event.get("count")
+            if isinstance(count, int) and count > 0:
+                self._progress["stream_count"] = count
             self._progress["detail"] = self._t(
                 f"音声・映像 {event.get('count', '?')}ストリームを処理中",
                 f"Processing {event.get('count', '?')} audio/video streams")
@@ -503,11 +535,46 @@ class LiveCatchApp(tk.Tk):
                 self._progress["percent"] = 100.0
         self._render_progress()
 
+    def _catchup_percent(self):
+        states = list(self._progress.get("catchup", {}).values())
+        values = [float(state["percent"]) for state in states
+                  if isinstance(state.get("percent"), (int, float))]
+        return min(values) if values else None
+
+    def _download_percent(self):
+        if self._progress.get("catchup") and not self._progress.get("caught_up"):
+            return self._catchup_percent()
+        values = [float(state["percent"]) for state in self._progress.get("streams", {}).values()
+                  if isinstance(state.get("percent"), (int, float))]
+        return min(values) if values else None
+
+    def _phase_progress_text(self, step_phase: str, state: str) -> str:
+        if state == "done":
+            return "100%"
+        if state != "active":
+            return ""
+        if step_phase == "downloading":
+            percent = self._download_percent()
+            if percent is not None:
+                return f"{percent:.0f}%"
+            if self._progress.get("caught_up"):
+                return "LIVE"
+        return "…"
+
     def _render_progress(self):
         if not hasattr(self, "phase_var"):
             return
         phase = self._progress.get("phase", "starting")
-        self.phase_var.set(self._phase_text(phase))
+        phase_label = self._phase_text(phase)
+        if phase == "downloading":
+            catchup_percent = self._catchup_percent()
+            if self._progress.get("catchup") and not self._progress.get("caught_up") and catchup_percent is not None:
+                phase_label += self._t(
+                    f" — ライブへ追いつき {catchup_percent:.0f}%",
+                    f" — catch-up {catchup_percent:.0f}%")
+            elif self._progress.get("caught_up"):
+                phase_label += self._t(" — LIVE", " — LIVE")
+        self.phase_var.set(phase_label)
         current_phase = phase if phase in PROGRESS_PHASES else self._progress.get("last_phase", "starting")
         current_index = PROGRESS_PHASES.index(current_phase)
         error_state = phase in {"failed", "cancelled", "forced"}
@@ -522,8 +589,12 @@ class LiveCatchApp(tk.Tk):
                 state = "idle"
             background, foreground = PROGRESS_COLORS[state]
             step = self.phase_steps[step_phase]
-            step.configure(text=("✓ " if state == "done" else "▶ " if state == "active" else "") + self._phase_text(step_phase),
-                           bg=background, fg=foreground)
+            prefix = "✓ " if state == "done" else "▶ " if state == "active" else ""
+            progress_text = self._phase_progress_text(step_phase, state)
+            label = prefix + self._phase_text(step_phase)
+            if progress_text:
+                label += f"\n{progress_text}"
+            step.configure(text=label, bg=background, fg=foreground)
         detail = self._progress.get("detail", "")
         if not detail:
             known = []
@@ -537,10 +608,16 @@ class LiveCatchApp(tk.Tk):
                 detail = self._t("処理中…", "Working…")
         self.detail_var.set(detail)
         percent_values = []
-        for state in self._progress.get("streams", {}).values():
-            percent = state.get("percent")
-            if isinstance(percent, (int, float)):
-                percent_values.append(float(percent))
+        catchup_percent = self._catchup_percent()
+        if self._progress.get("catchup") and not self._progress.get("caught_up") and catchup_percent is not None:
+            percent_values = [catchup_percent]
+        else:
+            for state in self._progress.get("streams", {}).values():
+                percent = state.get("percent")
+                if isinstance(percent, (int, float)):
+                    percent_values.append(float(percent))
+        if self._progress.get("caught_up") and self._progress.get("active") and phase == "downloading":
+            percent_values = []
         if isinstance(self._progress.get("percent"), (int, float)):
             percent_values = [self._progress["percent"]]
         if percent_values:
@@ -580,6 +657,17 @@ class LiveCatchApp(tk.Tk):
                 ("経過 " if self._progress.get("active") else "所要時間 ") + format_elapsed(elapsed),
                 ("Elapsed " if self._progress.get("active") else "Duration ") + format_elapsed(elapsed),
             ))
+        catchup_percent = self._catchup_percent()
+        if self._progress.get("catchup"):
+            if self._progress.get("caught_up"):
+                parts.append(self._t("追いつき完了 / LIVE", "Catch-up complete / LIVE"))
+            elif catchup_percent is not None:
+                gaps = [item.get("gap_fragments") for item in self._progress["catchup"].values()
+                        if isinstance(item.get("gap_fragments"), int)]
+                gap = max(gaps) if gaps else None
+                parts.append(self._t(
+                    f"追いつき {catchup_percent:.1f}%" + (f" / 残り約{gap} frag" if gap is not None else ""),
+                    f"Catch-up {catchup_percent:.1f}%" + (f" / about {gap} frag left" if gap is not None else "")))
         for stream, state in sorted(self._progress.get("streams", {}).items()):
             label = str(stream)
             percent = state.get("percent")
@@ -609,7 +697,7 @@ class LiveCatchApp(tk.Tk):
                 if self.closing:
                     self.destroy()
                     return
-            if event["event"] not in {"phase", "progress", "fragment", "streams", "snapshot"}:
+            if event["event"] not in {"phase", "progress", "fragment", "catchup", "streams", "snapshot"}:
                 log_events.append(event)
         if log_events:
             self._log("\n".join(e.get("message") or json.dumps(e, ensure_ascii=False) for e in log_events))
