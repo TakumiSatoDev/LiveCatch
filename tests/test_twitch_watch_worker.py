@@ -12,7 +12,7 @@ from livecatch_core.config import Settings
 from livecatch_core import worker
 
 
-def run_contract(monkeypatch, tmp_path, info, expected):
+def run_contract(monkeypatch, tmp_path, info, expected, *, live_from_start=False):
     observed = {}
     class PP:
         def __init__(self, *args): pass
@@ -33,7 +33,8 @@ def run_contract(monkeypatch, tmp_path, info, expected):
     monkeypatch.setattr(worker, 'ffmpeg_stop_bridge', lambda *a,**k:nullcontext())
     monkeypatch.setattr(worker, 'fragment_patch', lambda *a,**k:nullcontext())
     monkeypatch.setattr(worker, 'find_tool', lambda x:'/fake/'+x)
-    settings = Settings(url='https://twitch.tv/example', save_dir=str(tmp_path))
+    settings = Settings(url='https://twitch.tv/example', save_dir=str(tmp_path),
+                        live_from_start=live_from_start)
     def run(): return worker.record(settings, Event(), lambda *a,**k:None, twitch_stream_id=expected)
     return observed, run, PPError
 
@@ -43,6 +44,15 @@ def test_live_watch_removes_reservation_wait_and_vod_mode(monkeypatch, tmp_path)
         {'extractor_key':'TwitchStream', 'is_live':True, 'id':'1234'}, '1234')
     assert run() == 0 and observed['download_started']
     assert observed['live_from_start'] is False and 'wait_for_video' not in observed
+
+
+def test_live_watch_can_catch_up_when_requested(monkeypatch, tmp_path):
+    observed, run, _ = run_contract(
+        monkeypatch, tmp_path,
+        {'extractor_key':'TwitchStream', 'is_live':True, 'id':'1234'}, '1234',
+        live_from_start=True)
+    assert run() == 0 and observed['download_started']
+    assert observed['live_from_start'] is True and 'wait_for_video' not in observed
 
 
 @pytest.mark.parametrize('info', [
