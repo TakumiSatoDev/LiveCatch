@@ -40,7 +40,8 @@ def test_bulk_normalizes_and_deduplicates():
 
 @pytest.mark.parametrize('changes', [
     {'interval': 29}, {'interval': True}, {'interval': 3601}, {'max_recordings': 9},
-    {'max_recordings': False}, {'autostart': 'yes'}, {'schema_version': 2},
+    {'max_recordings': False}, {'autostart': 'yes'}, {'monitor_preset': 'warp'},
+    {'catchup_mode': 'archive'}, {'schema_version': 2},
     {'channels': [WatchChannel('a')]}, {'channels': (WatchChannel('A'),)},
     {'channels': (WatchChannel('a'), WatchChannel('a'))},
     {'channels': (WatchChannel('a', 'yes'),)},
@@ -393,3 +394,28 @@ def test_factory_failure_counts_towards_recording_attempt_limit():
         h.tick(60)
         if s.probe: h.live()
     assert s.attempts == 3 and s.recording is None and s.status == 'retry_limit'
+
+
+def test_live_addition_is_checked_immediately_and_elapsed_is_kept():
+    now=[10.0]; workers=[]
+    def factory(kind, identity=None):
+        worker=FakeWorker(kind, identity);workers.append(worker);return worker
+    manager=WatchManager(factory=factory, clock=lambda:now[0])
+    config=WatchConfig((WatchChannel('channel0'),), catchup_mode='from_start')
+    manager.configure(config, Settings())
+    manager.start();manager.tick()
+    manager.states['channel0'].probe.worker.finish(result={'status':'offline'});manager.tick()
+
+    manager.add_channels((WatchChannel('channel1'),), Settings())
+    manager.tick()
+    added=manager.states['channel1']
+    assert added.probe is not None
+    added.probe.worker.finish(result={'status':'live','stream_id':'4321','title':'late add'})
+    manager.tick()
+    assert added.recording is not None
+    assert added.recording.worker.settings.live_from_start is True
+    now[0]+=65
+    assert manager.elapsed_seconds('channel1')==65
+    added.recording.worker.finish();manager.tick()
+    assert added.last_elapsed==65
+    assert manager.elapsed_seconds('channel1')==65
