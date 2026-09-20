@@ -123,31 +123,50 @@ class LiveCatchApp(tk.Tk):
         lang.bind("<<ComboboxSelected>>", self._rebuild)
         self.notebook = ttk.Notebook(self.body)
         self.notebook.pack(fill="x", pady=12)
-        sections = [
-            (("録画", "Recording"), ("mode", "url", "save_dir", "quality_preset", "output_format", "concurrent_fragments")),
-            (("詳細", "Advanced"), ("use_temp_dir", "temp_dir", "output_template", "wait_seconds", "live_from_start",
-                                  "write_info_json", "embed_metadata", "lightweight_catchup_postprocess",
-                                  "cookies_from_browser", "browser", "engine", "prefetch")),
-            (("GPU変換", "GPU export"), ("gpu_export", "gpu_device", "export_height", "gpu_jobs", "gpu_preset")),
-        ]
-        for title, names in sections:
-            frame = ttk.Frame(self.notebook, padding=10)
-            self.notebook.add(frame, text=self._t(*title))
-            frame.columnconfigure(1, weight=1)
+
+        def add_fields(parent, names):
+            parent.columnconfigure(1, weight=1)
             for row, name in enumerate(names):
                 label = self._t(*LABELS[name])
                 var = self.vars[name]
                 if isinstance(var, tk.BooleanVar):
-                    ttk.Checkbutton(frame, text=label, variable=var).grid(row=row, column=0, columnspan=2, sticky="w", pady=3)
+                    ttk.Checkbutton(parent, text=label, variable=var).grid(
+                        row=row, column=0, columnspan=3, sticky="w", pady=3)
                     continue
-                ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=4)
+                ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=3)
                 if name in CHOICES:
-                    widget = ttk.Combobox(frame, textvariable=var, values=CHOICES[name], state="readonly")
+                    widget = ttk.Combobox(parent, textvariable=var, values=CHOICES[name], state="readonly")
                 else:
-                    widget = ttk.Entry(frame, textvariable=var)
-                widget.grid(row=row, column=1, sticky="ew", pady=4)
+                    widget = ttk.Entry(parent, textvariable=var)
+                widget.grid(row=row, column=1, sticky="ew", pady=3)
                 if name in ("save_dir", "temp_dir"):
-                    ttk.Button(frame, text="…", width=3, command=lambda n=name: self._browse(n)).grid(row=row, column=2)
+                    ttk.Button(parent, text="...", width=3,
+                               command=lambda n=name: self._browse(n)).grid(row=row, column=2, padx=(4, 0))
+
+        self.record_tab = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(self.record_tab, text=self._t("録画", "Recording"))
+        add_fields(self.record_tab, ("mode", "url"))
+
+        self.settings_tab = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(self.settings_tab, text=self._t("設定", "Settings"))
+        self.settings_tab.columnconfigure(0, weight=1)
+        self.settings_tab.columnconfigure(1, weight=1)
+        setting_groups = (
+            (("保存・画質", "Output / quality"),
+             ("save_dir", "use_temp_dir", "temp_dir", "quality_preset", "output_format",
+              "output_template", "write_info_json", "embed_metadata")),
+            (("取得・認証", "Acquisition / auth"),
+             ("wait_seconds", "live_from_start", "lightweight_catchup_postprocess",
+              "cookies_from_browser", "browser")),
+            (("手動録画の性能", "Manual recording performance"),
+             ("engine", "concurrent_fragments", "prefetch")),
+            (("GPU変換", "GPU export"),
+             ("gpu_export", "gpu_device", "export_height", "gpu_jobs", "gpu_preset")),
+        )
+        for index, (title, names) in enumerate(setting_groups):
+            frame = ttk.LabelFrame(self.settings_tab, text=self._t(*title), padding=8)
+            frame.grid(row=index // 2, column=index % 2, sticky="nsew", padx=4, pady=4)
+            add_fields(frame, names)
         ttk.Label(self.body, wraplength=960, text=self._t(
             "reservation＝予約 / live_full＝終了まで / catchup_stop＝最初に観測した共通地点まで（YouTube DVR）。\n"
             "GPUは通信を速くしません。offは無変換保存、auto/cuda/cpuは元動画を残して別のMP4を作ります。",
