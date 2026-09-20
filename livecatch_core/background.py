@@ -15,6 +15,8 @@ import tempfile
 from threading import Event, Thread
 from typing import Callable
 
+from .ui_text import repair_mojibake
+
 BACKGROUND_FILE = Path.home() / ".livecatch_background.json"
 INSTANCE_FILE = Path.home() / ".livecatch.instance.lock"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -187,8 +189,9 @@ def windows_icon(commands: Queue, language: str):
         def send(_icon, _item):
             commands.put((command, ""))
         return send
-    menu = pystray.Menu(*(pystray.MenuItem(en if language == "en" else ja, action(command), default=i == 0)
-                          for i, (ja, en, command) in enumerate(titles)))
+    menu = pystray.Menu(*(pystray.MenuItem(
+        en if language == "en" else repair_mojibake(ja), action(command), default=i == 0)
+        for i, (ja, en, command) in enumerate(titles)))
     return pystray.Icon("LiveCatch", image, "LiveCatch", menu)
 
 
