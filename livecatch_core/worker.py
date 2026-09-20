@@ -55,12 +55,19 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
         def run(self, info):
             if cancel.is_set():
                 raise KeyboardInterrupt()
-            if twitch_stream_id is not None and (
-                info.get("extractor_key") != "TwitchStream"
-                or info.get("is_live") is not True
-                or str(info.get("id", "")) != twitch_stream_id
-            ):
-                raise PostProcessingError("Twitch broadcast changed/ended after the check; waiting for a fresh check.")
+            if twitch_stream_id is not None:
+                exact_live = (
+                    info.get("extractor_key") == "TwitchStream"
+                    and info.get("is_live") is True
+                    and str(info.get("id", "")) == twitch_stream_id
+                )
+                associated_vod = (
+                    settings.live_from_start
+                    and info.get("extractor_key") == "TwitchVod"
+                )
+                if not (exact_live or associated_vod):
+                    raise PostProcessingError(
+                        "Twitch broadcast changed/ended after the check; waiting for a fresh check.")
             if youtube_video_id is not None and (
                 info.get("extractor_key") != "Youtube"
                 or info.get("is_live") is not True
@@ -84,6 +91,15 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
                 outputs.append(Path(filename))
                 emit("output", path=filename)
             return [], info
+
+    if twitch_stream_id is not None and settings.live_from_start:
+        # yt-dlp may switch a Twitch livestream to its associated growing VOD
+        # when live_from_start is requested. Reconfirm the exact live stream ID
+        # immediately before allowing that VOD path.
+        from .twitch_watch_probe import probe_channel as probe_twitch_channel
+        current = probe_twitch_channel(settings)
+        if current.get("status") != "live" or str(current.get("stream_id", "")) != twitch_stream_id:
+            raise RuntimeError("Twitch broadcast changed/ended before catch-up recording started.")
 
     options = ydl_options(settings, ffmpeg)
     if twitch_stream_id is not None or youtube_video_id is not None:
