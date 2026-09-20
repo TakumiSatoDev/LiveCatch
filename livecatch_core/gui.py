@@ -151,21 +151,20 @@ class LiveCatchApp(tk.Tk):
         self.notebook.add(self.settings_tab, text=self._t("設定", "Settings"))
         self.settings_tab.columnconfigure(0, weight=1)
         self.settings_tab.columnconfigure(1, weight=1)
+        self.settings_tab.columnconfigure(2, weight=1)
         setting_groups = (
             (("保存・画質", "Output / quality"),
              ("save_dir", "use_temp_dir", "temp_dir", "quality_preset", "output_format",
               "output_template", "write_info_json", "embed_metadata")),
-            (("取得・認証", "Acquisition / auth"),
+            (("取得・手動録画", "Acquisition / manual recording"),
              ("wait_seconds", "live_from_start", "lightweight_catchup_postprocess",
-              "cookies_from_browser", "browser")),
-            (("手動録画の性能", "Manual recording performance"),
-             ("engine", "concurrent_fragments", "prefetch")),
+              "cookies_from_browser", "browser", "engine", "concurrent_fragments", "prefetch")),
             (("GPU変換", "GPU export"),
              ("gpu_export", "gpu_device", "export_height", "gpu_jobs", "gpu_preset")),
         )
         for index, (title, names) in enumerate(setting_groups):
             frame = ttk.LabelFrame(self.settings_tab, text=self._t(*title), padding=8)
-            frame.grid(row=index // 2, column=index % 2, sticky="nsew", padx=4, pady=4)
+            frame.grid(row=0, column=index, sticky="nsew", padx=4, pady=4)
             add_fields(frame, names)
         ttk.Label(self.body, wraplength=960, text=self._t(
             "reservation＝予約 / live_full＝終了まで / catchup_stop＝最初に観測した共通地点まで（YouTube DVR）。\n"
@@ -173,6 +172,16 @@ class LiveCatchApp(tk.Tk):
             "reservation = wait / live_full = until end / catchup_stop = shared initial cutoff (YouTube DVR).\n"
             "GPU does not accelerate networking. off preserves source; auto/cuda/cpu create a separate lossy MP4."),
                   ).pack(anchor="w", pady=(0, 8))
+        bar = ttk.Frame(self.body)
+        bar.pack(fill="x")
+        self.start_button = ttk.Button(bar, text=self._t("開始", "Start"), command=self._start)
+        self.start_button.pack(side="left")
+        ttk.Button(bar, text=self._t("停止", "Stop"), command=self.supervisor.stop).pack(side="left", padx=5)
+        ttk.Button(bar, text=self._t("強制停止", "Force stop"), command=self._force).pack(side="left")
+        ttk.Button(bar, text=self._t("設定・実行内容", "Execution settings"), command=self._preview).pack(side="left", padx=5)
+        ttk.Button(bar, text=self._t("ツール / GPU確認", "Tools / GPU check"), command=self._diagnose).pack(side="left")
+        ttk.Button(bar, text=self._t("保存先を開く", "Open folder"), command=self._open_folder).pack(side="left", padx=5)
+        bar.pack_configure(pady=(0, 8))
         status = ttk.LabelFrame(self.body, text=self._t("進行状況", "Progress"), padding=8)
         status.pack(fill="x", pady=(0, 8))
         status.columnconfigure(0, weight=1)
@@ -204,15 +213,6 @@ class LiveCatchApp(tk.Tk):
         ttk.Label(status, textvariable=self.detail_var, wraplength=960).grid(
             row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
         self._render_progress()
-        bar = ttk.Frame(self.body)
-        bar.pack(fill="x")
-        self.start_button = ttk.Button(bar, text=self._t("開始", "Start"), command=self._start)
-        self.start_button.pack(side="left")
-        ttk.Button(bar, text=self._t("停止", "Stop"), command=self.supervisor.stop).pack(side="left", padx=5)
-        ttk.Button(bar, text=self._t("強制停止", "Force stop"), command=self._force).pack(side="left")
-        ttk.Button(bar, text=self._t("設定・実行内容", "Execution settings"), command=self._preview).pack(side="left", padx=5)
-        ttk.Button(bar, text=self._t("ツール / GPU確認", "Tools / GPU check"), command=self._diagnose).pack(side="left")
-        ttk.Button(bar, text=self._t("保存先を開く", "Open folder"), command=self._open_folder).pack(side="left", padx=5)
         self.log = tk.Text(self.body, height=16, wrap="word", state="disabled")
         self.log.pack(fill="both", expand=True, pady=(12, 0))
         self.start_button.configure(state="disabled" if self.supervisor.active else "normal")
