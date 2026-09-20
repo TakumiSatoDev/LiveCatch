@@ -8,7 +8,11 @@ from tkinter import messagebox, ttk
 from .config import Settings
 from .gui import LiveCatchApp
 from .tools import find_tool
-from .twitch_watch import WatchChannel, WatchConfig, WatchManager, WatchStore, normalize_channel, parse_channels
+from .twitch_watch import (
+    MONITOR_PRESETS, WatchChannel, WatchConfig, WatchManager, WatchStore,
+    apply_monitor_preset, normalize_channel, parse_channels,
+)
+from .ui_text import format_elapsed
 from .updates import check_for_update
 
 STATUS = {
@@ -61,8 +65,11 @@ class TwitchWatchApp(LiveCatchApp):
             self.watch_interval = tk.StringVar(value=str(self.watch_config.interval))
             self.watch_limit = tk.StringVar(value=str(self.watch_config.max_recordings))
             self.watch_auto = tk.BooleanVar(value=self.watch_config.autostart)
+            self.watch_preset = tk.StringVar(value=self.watch_config.monitor_preset)
+            self.watch_catchup = tk.StringVar(value=self.watch_config.catchup_mode)
         frame = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(frame, text=self._t("Twitch自動録画", "Twitch auto-record"))
+        self.watch_tab = frame
+        self.notebook.add(frame, text=self._t("YouTube / Twitch 自動録画", "YouTube / Twitch auto-record"))
         ttk.Label(frame, text=self._t("チャンネル名 / URL（空白・カンマで複数登録）",
                                      "Channel names / URLs (space/comma separated)")).pack(anchor="w")
         add = ttk.Frame(frame)
@@ -71,13 +78,16 @@ class TwitchWatchApp(LiveCatchApp):
         ttk.Button(add, text=self._t("追加", "Add"), command=self._watch_add).pack(side="left", padx=4)
         tree_box = ttk.Frame(frame)
         tree_box.pack(fill="x")
-        self.watch_tree = ttk.Treeview(tree_box, columns=("enabled", "status", "checked", "title"), height=6, selectmode="extended")
+        self.watch_tree = ttk.Treeview(
+            tree_box, columns=("enabled", "status", "elapsed", "checked", "title"),
+            height=6, selectmode="extended")
         self.watch_tree.heading("#0", text=self._t("チャンネル", "Channel"))
         self.watch_tree.column("#0", width=145, stretch=False)
         for key, title, width in (("enabled", ("監視", "Enabled"), 55),
-                                  ("status", ("状態", "Status"), 215),
+                                  ("status", ("状態", "Status"), 190),
+                                  ("elapsed", ("時間", "Time"), 75),
                                   ("checked", ("最終確認", "Last check"), 80),
-                                  ("title", ("配信タイトル", "Stream title"), 250)):
+                                  ("title", ("配信タイトル", "Stream title"), 240)):
             self.watch_tree.heading(key, text=self._t(*title))
             self.watch_tree.column(key, width=width, stretch=key == "title")
         scroll = ttk.Scrollbar(tree_box, orient="vertical", command=self.watch_tree.yview)
@@ -99,6 +109,18 @@ class TwitchWatchApp(LiveCatchApp):
         ttk.Label(limits, text=self._t("同時自動録画上限", "Max auto-recordings")).pack(side="left")
         ttk.Combobox(limits, textvariable=self.watch_limit, values=tuple(range(1, 9)), state="readonly", width=4).pack(side="left", padx=4)
         ttk.Checkbutton(limits, text=self._t("アプリ起動時に監視再開", "Monitor on app startup"), variable=self.watch_auto).pack(side="left", padx=8)
+
+        monitor_opts = ttk.Frame(frame)
+        monitor_opts.pack(fill="x", pady=3)
+        ttk.Label(monitor_opts, text=self._t("監視録画プリセット", "Monitoring preset")).pack(side="left")
+        ttk.Combobox(
+            monitor_opts, textvariable=self.watch_preset, values=tuple(MONITOR_PRESETS),
+            state="readonly", width=12).pack(side="left", padx=(4, 14))
+        ttk.Label(monitor_opts, text=self._t("配信途中で検知した場合", "When detected mid-stream")).pack(side="left")
+        ttk.Combobox(
+            monitor_opts, textvariable=self.watch_catchup,
+            values=("from_start", "live_edge"), state="readonly", width=12).pack(side="left", padx=4)
+
         actions = ttk.Frame(frame)
         actions.pack(fill="x", pady=4)
         for title, command in ((("設定保存", "Save settings"), self._watch_save),
@@ -111,15 +133,18 @@ class TwitchWatchApp(LiveCatchApp):
         self.watch_detail = tk.StringVar()
         ttk.Label(frame, textvariable=self.watch_detail, wraplength=900).pack(anchor="w")
         ttk.Label(frame, wraplength=900, text=self._t(
-            "アプリ・PCの起動中のみ監視。登録済み配信を検知時点から録画します。\n"
-            "画質・保存先・GPU設定は監視開始時の設定を使用。チャンネル編集は監視停止後に行ってください。",
-            "Requires the app/PC to remain running. Records from detection, not from an earlier VOD.\n"
-            "Uses quality/folder/GPU settings at monitor start. Pause monitoring before editing channels.")).pack(anchor="w", pady=(4, 0))
+            "監視中でもチャンネルを追加でき、追加直後に現在の配信を確認します。from_startはDVR等で利用可能な範囲を先頭から追いつきます。\n"
+            "保存先・画質・Cookie等は共通設定、fragment/prefetch/GPU並列は監視録画プリセットを使用します。",
+            "Channels can be added while monitoring and are checked immediately. from_start catches up from the available DVR/start when supported.\n"
+            "Output/quality/cookies use shared settings; fragment/prefetch/GPU parallelism uses the monitoring preset.")).pack(anchor="w", pady=(4, 0))
         self._render_watch()
 
     def _watch_values(self, channels=None):
-        return WatchConfig(self.watch_config.channels if channels is None else tuple(channels),
-                           int(self.watch_interval.get()), int(self.watch_limit.get()), bool(self.watch_auto.get()))
+        return WatchConfig(
+            self.watch_config.channels if channels is None else tuple(channels),
+            int(self.watch_interval.get()), int(self.watch_limit.get()), bool(self.watch_auto.get()),
+            self.watch_preset.get(), self.watch_catchup.get(),
+        )
 
     def _commit_watch_config(self, config):
         config.validate()
@@ -130,7 +155,7 @@ class TwitchWatchApp(LiveCatchApp):
         if manager.recording_channels - {c.login for c in config.channels}:
             raise ValueError(self._t("削除するチャンネルの録画を先に停止してください。", "Stop a channel's recording before removing it."))
         self.watch_store.save(config)
-        manager.configure(config, settings)
+        manager.configure(config, apply_monitor_preset(settings, config.monitor_preset))
         self.watch_config = config
         self._render_watch()
 
@@ -138,8 +163,21 @@ class TwitchWatchApp(LiveCatchApp):
         try:
             names = parse_channels(self.watch_input.get())
             existing = {c.login for c in self.watch_config.channels}
-            channels = self.watch_config.channels + tuple(WatchChannel(n) for n in names if n not in existing)
-            self._commit_watch_config(self._watch_values(channels))
+            additions = tuple(WatchChannel(n) for n in names if n not in existing)
+            if not additions:
+                self.watch_input.set("")
+                return
+            channels = self.watch_config.channels + additions
+            if self.watch_manager.running:
+                config = replace(self.watch_config, channels=channels)
+                config.validate()
+                self.watch_store.save(config)
+                monitor_settings = apply_monitor_preset(self.settings(), config.monitor_preset)
+                self.watch_manager.add_channels(additions, monitor_settings)
+                self.watch_config = config
+                self._render_watch()
+            else:
+                self._commit_watch_config(self._watch_values(channels))
             self.watch_input.set("")
         except (ValueError, OSError) as exc:
             messagebox.showerror("LiveCatch", str(exc))
@@ -172,13 +210,15 @@ class TwitchWatchApp(LiveCatchApp):
             if not find_tool("ffmpeg") or not find_tool("ffprobe"):
                 raise ValueError(self._t("ffmpegとffprobeを用意してください。", "ffmpeg and ffprobe are required."))
             self._commit_watch_config(self._watch_values())
-            settings = self.settings()
+            base_settings = self.settings()
+            settings = apply_monitor_preset(base_settings, self.watch_config.monitor_preset)
             if (settings.concurrent_fragments > 32 or settings.prefetch > 4 or settings.gpu_jobs > 4
                     or settings.gpu_preset == "max_speed") and not messagebox.askyesno("LiveCatch", self._t(
                 "高負荷設定は同時録画本数ぶん適用されます。監視を開始しますか？",
                 "High-load settings apply to EACH concurrent recording. Start monitoring?")):
                 return
-            self.store.save(settings)
+            self.store.save(base_settings)
+            self.watch_manager.configure(self.watch_config, settings)
             self.watch_manager.start()
             self._render_watch()
         except (ValueError, OSError) as exc:
@@ -214,17 +254,20 @@ class TwitchWatchApp(LiveCatchApp):
             status = state.status if state else "idle"
             if not c.enabled and not (state and state.recording):
                 status = "disabled"
+            elapsed = format_elapsed(manager.elapsed_seconds(c.login)) if state and (
+                state.recording is not None or state.last_elapsed > 0
+            ) else ""
             values = (self._t("有効", "Yes") if c.enabled else self._t("無効", "No"),
-                      self._t(*STATUS.get(status, (status, status))), state.checked if state else "",
-                      state.title if state else "")
+                      self._t(*STATUS.get(status, (status, status))), elapsed,
+                      state.checked if state else "", state.title if state else "")
             if not self.watch_tree.exists(c.login):
                 self.watch_tree.insert("", "end", iid=c.login, text=c.login, values=values)
             elif tuple(self.watch_tree.item(c.login, "values")) != values:
                 self.watch_tree.item(c.login, values=values)
         mode = self._t("監視中", "Monitoring") if manager.running else self._t("監視停止", "Paused")
         self.watch_summary.set(self._t(
-            f"{mode} / 登録 {len(desired)}件 / 自動録画 {len(manager.recording_channels)}/{manager.config.max_recordings}件",
-            f"{mode} / {len(desired)} channels / auto-recordings {len(manager.recording_channels)}/{manager.config.max_recordings}"))
+            f"{mode} / 登録 {len(desired)}件 / 自動録画 {len(manager.recording_channels)}/{manager.config.max_recordings}件 / {manager.config.monitor_preset} / {manager.config.catchup_mode}",
+            f"{mode} / {len(desired)} channels / auto-recordings {len(manager.recording_channels)}/{manager.config.max_recordings} / {manager.config.monitor_preset} / {manager.config.catchup_mode}"))
         selected = self.watch_tree.selection()
         self.watch_detail.set(manager.states[selected[0]].detail if selected and selected[0] in manager.states else "")
 
