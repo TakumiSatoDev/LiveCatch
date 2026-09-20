@@ -14,7 +14,7 @@ from livecatch_core import worker
 VIDEO='AbCdEf_-123'
 
 
-def contract(monkeypatch,tmp_path,info):
+def contract(monkeypatch,tmp_path,info,*,live_from_start=False):
     observed={}
     class PP:
         def __init__(self,*args):pass
@@ -36,7 +36,10 @@ def contract(monkeypatch,tmp_path,info):
     monkeypatch.setattr(worker,'fragment_patch',lambda *a,**k:nullcontext())
     monkeypatch.setattr(worker,'find_tool',lambda name:'/fake/'+name)
     def run():
-        return worker.record(Settings(url='https://youtube.com/watch?v='+VIDEO,save_dir=str(tmp_path)),Event(),lambda *a,**k:None,youtube_video_id=VIDEO)
+        return worker.record(Settings(
+            url='https://youtube.com/watch?v='+VIDEO, save_dir=str(tmp_path),
+            live_from_start=live_from_start), Event(), lambda *a,**k:None,
+            youtube_video_id=VIDEO)
     return observed,run,Error
 
 
@@ -44,6 +47,15 @@ def test_youtube_live_does_not_wait_or_fetch_archive(monkeypatch,tmp_path):
     observed,run,_=contract(monkeypatch,tmp_path,{'extractor_key':'Youtube','id':VIDEO,'is_live':True,'live_status':'is_live'})
     assert run()==0 and observed['started']
     assert observed['live_from_start'] is False and 'wait_for_video' not in observed
+
+
+def test_youtube_live_can_catch_up_from_available_dvr(monkeypatch,tmp_path):
+    observed,run,_=contract(
+        monkeypatch,tmp_path,
+        {'extractor_key':'Youtube','id':VIDEO,'is_live':True,'live_status':'is_live'},
+        live_from_start=True)
+    assert run()==0 and observed['started']
+    assert observed['live_from_start'] is True and 'wait_for_video' not in observed
 
 @pytest.mark.parametrize('changes',[{'id':'OtherId_123'}, {'is_live':False}, {'live_status':'is_upcoming'}, {'live_status':'post_live'}, {'extractor_key':'Generic'}])
 def test_changed_or_ended_youtube_broadcast_rejected(monkeypatch,tmp_path,changes):
