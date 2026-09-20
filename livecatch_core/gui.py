@@ -15,7 +15,6 @@ from time import monotonic
 
 from . import __version__
 from .config import BROWSERS, QUALITY, ConfigStore, Settings
-from .media import probe_cuda
 from .options import ydl_options
 from .supervisor import Supervisor
 from .tools import find_tool
@@ -29,10 +28,9 @@ PHASE_LABELS = {
     "extracting": ("配信情報を取得中", "Extracting stream info"),
     "downloading": ("録画・ダウンロード中", "Recording / downloading"),
     "postprocessing": ("結合・後処理中", "Muxing / post-processing"),
-    "exporting": ("動画を変換中", "Exporting video"),
     "done": ("完了", "Completed"),
 }
-PROGRESS_PHASES = ("starting", "extracting", "downloading", "postprocessing", "exporting", "done")
+PROGRESS_PHASES = ("starting", "extracting", "downloading", "postprocessing", "done")
 PROGRESS_COLORS = {
     "idle": ("#e9eef2", "#52606d"),
     "active": ("#1769aa", "#ffffff"),
@@ -151,7 +149,6 @@ class LiveCatchApp(tk.Tk):
         self.notebook.add(self.settings_tab, text=self._t("設定", "Settings"))
         self.settings_tab.columnconfigure(0, weight=1)
         self.settings_tab.columnconfigure(1, weight=1)
-        self.settings_tab.columnconfigure(2, weight=1)
         setting_groups = (
             (("保存・画質", "Output / quality"),
              ("save_dir", "use_temp_dir", "temp_dir", "quality_preset", "output_format",
@@ -159,30 +156,30 @@ class LiveCatchApp(tk.Tk):
             (("取得・手動録画", "Acquisition / manual recording"),
              ("wait_seconds", "live_from_start", "lightweight_catchup_postprocess",
               "cookies_from_browser", "browser", "engine", "concurrent_fragments", "prefetch")),
-            (("GPU変換", "GPU export"),
-             ("gpu_export", "gpu_device", "export_height", "gpu_jobs", "gpu_preset")),
         )
         for index, (title, names) in enumerate(setting_groups):
             frame = ttk.LabelFrame(self.settings_tab, text=self._t(*title), padding=8)
             frame.grid(row=0, column=index, sticky="nsew", padx=4, pady=4)
             add_fields(frame, names)
-        ttk.Label(self.body, wraplength=960, text=self._t(
+        self.manual_help = ttk.Label(self.body, wraplength=960, text=self._t(
             "reservation＝予約 / live_full＝終了まで / catchup_stop＝最初に観測した共通地点まで（YouTube DVR）。\n"
-            "GPUは通信を速くしません。offは無変換保存、auto/cuda/cpuは元動画を残して別のMP4を作ります。",
+            "録画は配信の映像・音声を再エンコードせず保存します。",
             "reservation = wait / live_full = until end / catchup_stop = shared initial cutoff (YouTube DVR).\n"
-            "GPU does not accelerate networking. off preserves source; auto/cuda/cpu create a separate lossy MP4."),
-                  ).pack(anchor="w", pady=(0, 8))
+            "Recordings are saved without an extra re-encode step."))
+        self.manual_help.pack(anchor="w", pady=(0, 8))
         bar = ttk.Frame(self.body)
+        self.manual_bar = bar
         bar.pack(fill="x")
         self.start_button = ttk.Button(bar, text=self._t("開始", "Start"), command=self._start)
         self.start_button.pack(side="left")
         ttk.Button(bar, text=self._t("停止", "Stop"), command=self.supervisor.stop).pack(side="left", padx=5)
         ttk.Button(bar, text=self._t("強制停止", "Force stop"), command=self._force).pack(side="left")
         ttk.Button(bar, text=self._t("設定・実行内容", "Execution settings"), command=self._preview).pack(side="left", padx=5)
-        ttk.Button(bar, text=self._t("ツール / GPU確認", "Tools / GPU check"), command=self._diagnose).pack(side="left")
+        ttk.Button(bar, text=self._t("ツール確認", "Tools check"), command=self._diagnose).pack(side="left")
         ttk.Button(bar, text=self._t("保存先を開く", "Open folder"), command=self._open_folder).pack(side="left", padx=5)
         bar.pack_configure(pady=(0, 8))
         status = ttk.LabelFrame(self.body, text=self._t("進行状況", "Progress"), padding=8)
+        self.manual_status = status
         status.pack(fill="x", pady=(0, 8))
         status.columnconfigure(0, weight=1)
         status.columnconfigure(1, weight=1)
@@ -217,6 +214,23 @@ class LiveCatchApp(tk.Tk):
         self.log.pack(fill="both", expand=True, pady=(12, 0))
         self.start_button.configure(state="disabled" if self.supervisor.active else "normal")
 
+    def _set_manual_controls_visible(self, visible: bool):
+        if not all(hasattr(self, name) for name in ("manual_help", "manual_bar", "manual_status", "log")):
+            return
+        widgets = (
+            (self.manual_help, {"anchor": "w", "pady": (0, 8)}),
+            (self.manual_bar, {"fill": "x", "pady": (0, 8)}),
+            (self.manual_status, {"fill": "x", "pady": (0, 8)}),
+        )
+        if visible:
+            for widget, options in widgets:
+                if not widget.winfo_manager():
+                    widget.pack(before=self.log, **options)
+        else:
+            for widget, _options in widgets:
+                if widget.winfo_manager():
+                    widget.pack_forget()
+
     def _rebuild(self, _event=None):
         text = self.log.get("1.0", "end-1c")
         self.body.destroy()
@@ -243,13 +257,11 @@ class LiveCatchApp(tk.Tk):
             extreme = (
                 settings.concurrent_fragments > 32
                 or settings.prefetch > 4
-                or settings.gpu_jobs > 4
-                or settings.gpu_preset == "max_speed"
             )
             if extreme and not messagebox.askyesno("LiveCatch", self._t(
-                "高負荷の実験設定です。回線・ディスク・CPU/GPU負荷が大きくなり、"
+                "高負荷の実験設定です。回線・ディスク・CPU負荷が大きくなり、"
                 "YouTube/Twitch側の429・タイムアウトや、逆に低速化する場合があります。続行しますか？",
-                "Experimental high-load settings are enabled. Network, disk and GPU/CPU load may spike; "
+                "Experimental high-load settings are enabled. Network, disk and CPU load may spike; "
                 "the service may throttle with 429/timeouts and performance can get worse. Continue?"
             )):
                 return
@@ -269,28 +281,21 @@ class LiveCatchApp(tk.Tk):
             settings = self.settings()
             options = ydl_options(settings, find_tool("ffmpeg"))
             options.pop("retry_sleep_functions", None)
-            self._log(json.dumps({"engine": settings.engine, "yt_dlp": options,
-                                  "gpu_export": settings.gpu_export,
-                                  "gpu_preset": settings.gpu_preset}, ensure_ascii=False, indent=2))
+            self._log(json.dumps({"engine": settings.engine, "yt_dlp": options},
+                                 ensure_ascii=False, indent=2))
         except Exception as exc:
             messagebox.showerror("LiveCatch", str(exc))
 
     def _diagnose(self):
-        try:
-            device = self.settings().gpu_device
-        except ValueError as exc:
-            messagebox.showerror("LiveCatch", str(exc))
-            return
         def work():
             try:
                 from yt_dlp.version import __version__ as version
             except ImportError:
                 version = "missing: install requirements.txt"
-            ffmpeg = find_tool("ffmpeg")
-            gpu = probe_cuda(ffmpeg, device) if ffmpeg else (False, "ffmpeg missing")
             self.supervisor.events.put({"event": "log", "message": json.dumps(
-                {"yt_dlp": version, "ffmpeg": ffmpeg, "ffprobe": find_tool("ffprobe"),
-                 "deno": find_tool("deno"), "cuda_runtime": gpu}, ensure_ascii=False)})
+                {"yt_dlp": version, "ffmpeg": find_tool("ffmpeg"),
+                 "ffprobe": find_tool("ffprobe"), "deno": find_tool("deno")},
+                ensure_ascii=False)})
         Thread(target=work, daemon=True).start()
 
     def _open_folder(self):
@@ -306,8 +311,8 @@ class LiveCatchApp(tk.Tk):
 
     def _force(self):
         if self.supervisor.active and messagebox.askyesno("LiveCatch", self._t(
-            "処理中の結合・変換を中断します。未完成ファイルが残る場合があります。強制停止しますか？",
-            "This interrupts muxing/encoding and may leave partial files. Force stop?")):
+            "処理中の録画・結合を中断します。未完成ファイルが残る場合があります。強制停止しますか？",
+            "This interrupts recording/muxing and may leave partial files. Force stop?")):
             try:
                 self.supervisor.force_stop()
             except OSError as exc:
@@ -457,8 +462,11 @@ class LiveCatchApp(tk.Tk):
     def _handle_progress_event(self, event: dict):
         kind = event.get("event")
         if kind == "phase":
-            self._progress["phase"] = event.get("name", "starting")
-            self._progress["last_phase"] = self._progress["phase"]
+            phase = event.get("name", "starting")
+            if phase == "exporting":
+                phase = "postprocessing"
+            self._progress["phase"] = phase
+            self._progress["last_phase"] = phase
         elif kind == "progress":
             stream = event.get("stream", "media")
             state = self._progress["streams"].setdefault(stream, {})
@@ -482,18 +490,6 @@ class LiveCatchApp(tk.Tk):
             self._progress["detail"] = self._t(
                 f"保存済み {self._progress['outputs']}件: {event.get('path', '')}",
                 f"Saved {self._progress['outputs']}: {event.get('path', '')}")
-        elif kind == "export_batch":
-            self._progress["phase"] = "exporting"
-            self._progress["last_phase"] = "exporting"
-            self._progress["export_current"] = event.get("current", 0)
-            self._progress["export_total"] = event.get("total", 0)
-            self._progress["detail"] = self._t(
-                f"変換 {event.get('current', '?')}/{event.get('total', '?')}: {event.get('path', '')}",
-                f"Export {event.get('current', '?')}/{event.get('total', '?')}: {event.get('path', '')}")
-        elif kind == "exported":
-            self._progress["detail"] = self._t(
-                f"変換済み: {event.get('path', '')}",
-                f"Exported: {event.get('path', '')}")
         elif kind == "done":
             started_at = self._progress.get("started_at")
             if isinstance(started_at, (int, float)):
@@ -545,8 +541,6 @@ class LiveCatchApp(tk.Tk):
             percent = state.get("percent")
             if isinstance(percent, (int, float)):
                 percent_values.append(float(percent))
-        if self._progress.get("export_total"):
-            percent_values.append(100 * self._progress["export_current"] / self._progress["export_total"])
         if isinstance(self._progress.get("percent"), (int, float)):
             percent_values = [self._progress["percent"]]
         if percent_values:
@@ -603,10 +597,6 @@ class LiveCatchApp(tk.Tk):
             parts.append(label)
         if self._progress.get("outputs"):
             parts.append(self._t(f"保存済み {self._progress['outputs']}件", f"Saved {self._progress['outputs']}"))
-        if self._progress.get("export_total"):
-            parts.append(self._t(
-                f"変換 {self._progress['export_current']}/{self._progress['export_total']}",
-                f"Export {self._progress['export_current']}/{self._progress['export_total']}"))
         return "  •  ".join(parts) or self._t("まだ進行情報はありません", "No progress data yet")
 
     def _poll(self):
@@ -619,7 +609,7 @@ class LiveCatchApp(tk.Tk):
                 if self.closing:
                     self.destroy()
                     return
-            if event["event"] not in {"phase", "progress", "fragment", "streams", "snapshot", "export_batch"}:
+            if event["event"] not in {"phase", "progress", "fragment", "streams", "snapshot"}:
                 log_events.append(event)
         if log_events:
             self._log("\n".join(e.get("message") or json.dumps(e, ensure_ascii=False) for e in log_events))
