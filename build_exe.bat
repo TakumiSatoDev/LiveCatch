@@ -10,6 +10,11 @@ python -m PyInstaller --noconfirm --clean --onefile --console --name LiveCatchWo
 if errorlevel 1 exit /b 1
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name LiveCatch --collect-all yt_dlp --collect-all yt_dlp_ejs --collect-all pystray --hidden-import pystray._win32 --collect-all PIL livecatch.py
 if errorlevel 1 exit /b 1
+start /wait "" dist\LiveCatch.exe --ui-encoding-smoke
+if errorlevel 1 (
+    echo Packaged LiveCatch UI encoding smoke test failed.
+    exit /b 1
+)
 if not exist dist\tools mkdir dist\tools
 for %%F in (ffmpeg.exe ffprobe.exe deno.exe) do (
     if exist tools\%%F copy /Y tools\%%F dist\tools\%%F >nul
