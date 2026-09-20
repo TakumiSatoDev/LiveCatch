@@ -70,13 +70,21 @@ def test_gui_start_detection_stop_and_retry(app):
     assert s.recording is not None
     assert s.recording.worker.settings.live_from_start is True
     app._render_watch()
+    s.recording.worker.events.put({'event':'streams','count':1})
     s.recording.worker.events.put({'event':'phase','name':'downloading'})
     s.recording.worker.events.put({'event':'progress','stream':'video','percent':50.0,
                                    'fragment_index':10,'fragment_count':20,'speed':1048576})
+    s.recording.worker.events.put({'event':'catchup','stream':'video','percent':50.0,
+                                   'current':10,'total':20,'gap_fragments':10,'caught_up':False})
     manager.tick(); app._render_watch()
     assert app.watch_tree.set('alice','elapsed') == '00:00'
+    assert app.watch_tree.set('alice','status') in ('ライブへ追いつき中','Catching up to live')
     progress=app.watch_tree.set('alice','progress')
-    assert '50%' in progress and '10/20 frag' in progress
+    assert '50%' in progress and ('追いつき' in progress or 'Catch-up' in progress)
+    s.recording.worker.events.put({'event':'catchup','stream':'video','percent':100.0,
+                                   'current':20,'total':20,'gap_fragments':0,'caught_up':True})
+    manager.tick(); app._render_watch()
+    assert 'LIVE' in app.watch_tree.set('alice','progress')
     app.watch_tree.selection_set('alice'); app._watch_selected_stop()
     assert s.recording.worker.stopped
     s.recording.worker.finish('cancelled'); manager.tick()
