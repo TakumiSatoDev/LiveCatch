@@ -51,7 +51,10 @@ def test_watch_tab_registration_persistence_and_language(app):
     assert app.watch_config.channels[1].enabled is False
     app.vars['language'].set('en'); app._rebuild(); app.update()
     app.notebook.select(app.watch_tab); app.update()
-    assert app.watch_tree.winfo_ismapped() and app.start_button.winfo_ismapped()
+    assert app.watch_tree.winfo_ismapped()
+    assert not app.start_button.winfo_ismapped()
+    app.notebook.select(app.record_tab); app.update()
+    assert app.start_button.winfo_ismapped()
     assert app.watch_tree.get_children() == ('alice','bob')
     app.watch_tree.selection_set('bob'); app._watch_remove()
     assert app.watch_tree.get_children() == ('alice',)
@@ -67,7 +70,13 @@ def test_gui_start_detection_stop_and_retry(app):
     assert s.recording is not None
     assert s.recording.worker.settings.live_from_start is True
     app._render_watch()
+    s.recording.worker.events.put({'event':'phase','name':'downloading'})
+    s.recording.worker.events.put({'event':'progress','stream':'video','percent':50.0,
+                                   'fragment_index':10,'fragment_count':20,'speed':1048576})
+    manager.tick(); app._render_watch()
     assert app.watch_tree.set('alice','elapsed') == '00:00'
+    progress=app.watch_tree.set('alice','progress')
+    assert '50%' in progress and '10/20 frag' in progress
     app.watch_tree.selection_set('alice'); app._watch_selected_stop()
     assert s.recording.worker.stopped
     s.recording.worker.finish('cancelled'); manager.tick()
