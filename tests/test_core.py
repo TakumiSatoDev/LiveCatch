@@ -2,13 +2,16 @@ from dataclasses import replace
 from io import StringIO
 import json
 from pathlib import Path
+import shutil
+import zipfile
 import pytest
 
 from livecatch_core.config import ConfigStore, Settings, DEFAULT_TEMPLATE, normalize_url
 from livecatch_core.events import Emitter, EventBuffer, redact
 from livecatch_core.options import ydl_options
-from livecatch_core.updates import UpdateCheck, check_for_update, is_newer
+from livecatch_core.updates import UpdateCheck, check_for_update, download_update, is_newer
 from livecatch_core.ytdlp_patch import require_supported_version
+from livecatch_updater import _install
 
 @pytest.mark.parametrize('url', ['youtube.com/watch?v=abc','https://www.youtube.com/live/abc','https://youtu.be/abc','https://twitch.tv/example'])
 def test_urls(url):
@@ -107,3 +110,65 @@ def test_check_for_update(monkeypatch):
     assert isinstance(result, UpdateCheck)
     assert result.latest_version == "3.0.0-dev2" and result.update_available
     assert result.url.endswith("/releases/latest")
+
+
+def test_check_for_update_reads_release_package(monkeypatch):
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def read(self, _limit):
+            return json.dumps({
+                "tag_name": "v3.0.3",
+                "html_url": "https://github.com/TakumiSatoDev/LiveCatch/releases/tag/v3.0.3",
+                "assets": [{
+                    "name": "LiveCatch-Update-3.0.3.zip",
+                    "browser_download_url": "https://github.com/TakumiSatoDev/LiveCatch/releases/download/v3.0.3/LiveCatch-Update-3.0.3.zip",
+                }],
+            }).encode()
+
+    monkeypatch.setattr("livecatch_core.updates.urlopen", lambda *args, **kwargs: Response())
+    result = check_for_update("3.0.2")
+    assert result.latest_version == "3.0.3" and result.update_available
+    assert result.download_url.endswith("LiveCatch-Update-3.0.3.zip")
+
+
+def test_download_update_validates_and_extracts_payload(monkeypatch, tmp_path):
+    archive = tmp_path / "package.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        for name in ("LiveCatch.exe", "LiveCatchWorker.exe", "LiveCatchUpdater.exe"):
+            package.writestr(name, b"MZ")
+        package.writestr("tools/ffmpeg.exe", b"MZ")
+    data = archive.read_bytes()
+
+    class Response:
+        def __init__(self): self.offset = 0
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def read(self, limit):
+            chunk = data[self.offset:self.offset + limit]
+            self.offset += len(chunk)
+            return chunk
+
+    monkeypatch.setattr("livecatch_core.updates.urlopen", lambda *args, **kwargs: Response())
+    payload = download_update(UpdateCheck("3.0.2", "3.0.3", True, download_url="https://example.test/update.zip"))
+    try:
+        assert (payload / "LiveCatch.exe").is_file()
+        assert (payload / "LiveCatchUpdater.exe").is_file()
+        assert (payload / "tools" / "ffmpeg.exe").is_file()
+    finally:
+        shutil.rmtree(payload.parent, ignore_errors=True)
+
+
+def test_updater_replaces_installed_files(tmp_path):
+    target = tmp_path / "installed"
+    payload = tmp_path / "payload"
+    (target / "tools").mkdir(parents=True)
+    (payload / "tools").mkdir(parents=True)
+    for name in ("LiveCatch.exe", "LiveCatchWorker.exe", "LiveCatchUpdater.exe"):
+        (target / name).write_bytes(b"old")
+        (payload / name).write_bytes(b"new")
+    (target / "tools" / "ffmpeg.exe").write_bytes(b"old-tool")
+    (payload / "tools" / "ffmpeg.exe").write_bytes(b"new-tool")
+    _install(payload, target)
+    assert (target / "LiveCatch.exe").read_bytes() == b"new"
+    assert (target / "tools" / "ffmpeg.exe").read_bytes() == b"new-tool"

@@ -1,5 +1,5 @@
 #ifndef AppVersion
-#define AppVersion "3.0.0"
+#define AppVersion "3.0.3"
 #endif
 
 [Setup]
@@ -23,6 +23,8 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 ChangesAssociations=no
+CloseApplications=yes
+RestartApplications=no
 VersionInfoVersion={#AppVersion}
 VersionInfoCompany=TakumiSatoDev
 VersionInfoDescription=LiveCatch livestream recorder
@@ -39,6 +41,7 @@ Name: "desktopicon"; Description: "デスクトップにショートカットを
 [Files]
 Source: "..\dist\LiveCatch.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\LiveCatchWorker.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\LiveCatchUpdater.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\README.md"; DestDir: "{app}"; Flags: isreadme ignoreversion
 Source: "..\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
