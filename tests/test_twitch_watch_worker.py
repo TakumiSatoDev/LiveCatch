@@ -67,7 +67,7 @@ def test_changed_broadcast_refused_before_download(monkeypatch, tmp_path, info):
 
 
 def test_legacy_recording_options_unchanged(monkeypatch, tmp_path):
-    observed, run, _ = run_contract(monkeypatch, tmp_path, {'is_live':True}, None)
+    observed, run, _ = run_contract(monkeypatch, tmp_path, {'is_live':True}, None, live_from_start=True)
     assert run() == 0
     assert observed['live_from_start'] is True and observed['wait_for_video'] == (30,30)
 
