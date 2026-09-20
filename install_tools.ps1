@@ -30,6 +30,7 @@ if (Test-Path $YtDlpPath) {
 
 $FfmpegPath = Join-Path $ToolsDir "ffmpeg.exe"
 $FfprobePath = Join-Path $ToolsDir "ffprobe.exe"
+$DenoPath = Join-Path $ToolsDir "deno.exe"
 
 $NeedsFfmpegInstall = -not (Test-Path $FfmpegPath) -or -not (Test-Path $FfprobePath)
 
@@ -70,6 +71,27 @@ if (-not $NeedsFfmpegInstall) {
     }
 }
 
+if (Test-Path $DenoPath) {
+    Write-Host ""
+    Write-Host "deno already exists. Skipping download:"
+    Write-Host "  $DenoPath"
+} else {
+    $DenoZipUrl = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
+    $DenoZipPath = Join-Path $TempDir "deno.zip"
+    $DenoExtractDir = Join-Path $TempDir "deno"
+
+    New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
+    Write-Host ""
+    Write-Host "Downloading deno..."
+    Invoke-WebRequest -Uri $DenoZipUrl -OutFile $DenoZipPath
+    Expand-Archive -Path $DenoZipPath -DestinationPath $DenoExtractDir -Force
+    $DenoExe = Get-ChildItem -Path $DenoExtractDir -Recurse -Filter "deno.exe" | Select-Object -First 1
+    if (-not $DenoExe) {
+        throw "deno.exe was not found in the downloaded archive."
+    }
+    Copy-Item $DenoExe.FullName -Destination $DenoPath -Force
+}
+
 if (Test-Path $TempDir) {
     Write-Host ""
     Write-Host "Cleaning temporary files..."
@@ -96,6 +118,9 @@ if (Test-Path $DistDir) {
     if (Test-Path $FfprobePath) {
         Copy-Item $FfprobePath -Destination (Join-Path $DistToolsDir "ffprobe.exe") -Force
     }
+    if (Test-Path $DenoPath) {
+        Copy-Item $DenoPath -Destination (Join-Path $DistToolsDir "deno.exe") -Force
+    }
 
     Write-Host "Copied tools to:"
     Write-Host "  $DistToolsDir"
@@ -110,6 +135,7 @@ Write-Host "Done."
 Write-Host "Installed tools:"
 Write-Host "  $YtDlpPath"
 Write-Host "  $FfmpegPath"
+Write-Host "  $DenoPath"
 Write-Host ""
 Write-Host "You can now run LiveCatch.exe or run_app.bat."
 if (-not $NoPause) {

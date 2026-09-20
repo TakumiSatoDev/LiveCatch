@@ -36,7 +36,7 @@ CUDAを使わない録画はNVIDIA GPUなしでも動く設計です。
 
 録画中はGUIの「進行状況」に、取得情報の解析、録画、結合、変換の段階を表示します。取得できる場合はfragment数・バイト数の割合、保存済みファイル数、変換の `n / total` も表示します。ライブ配信のように総量が決まらない処理は、現在のストリーム名と処理段階を表示します。
 
-起動時にはGitHubの `main` ブランチにある `livecatch_core/__init__.py` のバージョンだけをバックグラウンド確認します。新しいバージョンが見つかるとGUI上部の「アップデートあり」からリポジトリを開けます。通信できない場合も録画機能には影響しません。mainへ更新版を出すときは `livecatch_core/__init__.py` の `__version__` を上げてください。
+起動時にはGitHubの `main` ブランチにある `livecatch_core/__init__.py` のバージョンだけをバックグラウンド確認します。新しいバージョンが見つかるとGUI上部の「アップデートあり」からReleaseページを開けます。通信できない場合も録画機能には影響しません。更新版を出すときは `livecatch_core/__init__.py` の `__version__` を上げ、同じ番号のタグを作成してください。
 
 ## 取得エンジンを内部から変更
 
@@ -93,6 +93,18 @@ python benchmarks/loopback.py
 依存がない環境では明示的にskipします。外部サイト、Cookie、GPUは使いません。
 Windowsのexeは `build_exe.bat` でGUIと専用ワーカーを別々に作ります。
 `LiveCatch.exe`、`LiveCatchWorker.exe`、`tools/` を一緒に配置してください。
+
+## リリース版インストーラー
+
+リリース版はGitHub ActionsでWindows用のセットアップ.exeを作成します。`__version__` と同じバージョンのタグをmainに付けると、テスト、PyInstaller、Inno Setupを実行してGitHub Releaseへ `LiveCatch-Setup-X.Y.Z.exe` を添付します。
+
+ローカルで作成する場合は、Inno Setup 6をインストールしたうえで次を実行します。
+
+```powershell
+.\build_release.bat 3.0.0
+```
+
+インストーラーにはLiveCatch本体、録画ワーカー、FFmpeg、ffprobe、Deno、ライセンス通知を含めます。設定ファイルはユーザープロファイルに残るため、更新インストールで設定を削除しません。
 
 実行済みテスト・未検証項目は [docs/VALIDATION.md](docs/VALIDATION.md)、内部変更根拠は [docs/UPSTREAM_AUDIT.md](docs/UPSTREAM_AUDIT.md) を参照してください。
 配信の保存は権利・アクセス許可がある対象で利用してください。DRM・認証・アクセス制限を回避する機能はありません。

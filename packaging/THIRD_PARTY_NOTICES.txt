@@ -1,0 +1,29 @@
+LiveCatch third-party runtime notices
+=====================================
+
+The installer includes runtime tools downloaded during the release build.
+
+FFmpeg / ffprobe
+----------------
+The Windows binaries are downloaded from the gyan.dev FFmpeg builds page:
+https://www.gyan.dev/ffmpeg/builds/
+
+FFmpeg is distributed under the GNU General Public License, version 3 or later,
+or the applicable license stated by the binary build. Source and licensing
+information are available from:
+https://ffmpeg.org/legal.html
+https://github.com/GyanD/codexffmpeg
+
+yt-dlp
+------
+The Python package is bundled into LiveCatchWorker.exe from the pinned
+yt-dlp dependency in requirements.txt. yt-dlp is licensed under The Unlicense.
+https://github.com/yt-dlp/yt-dlp
+
+Deno
+----
+Deno is an optional JavaScript runtime used by yt-dlp for supported sites. The
+Windows binary is downloaded from the official Deno release page:
+https://github.com/denoland/deno/releases
+
+LiveCatch itself is provided under the license in the installed LICENSE file.

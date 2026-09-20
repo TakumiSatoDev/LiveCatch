@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.0.0
+
+### Added
+
+- Windows installer build using PyInstaller and Inno Setup.
+- GitHub Release workflow triggered by matching `vX.Y.Z` tags.
+- GUI progress panel for recording phases, fragment/byte progress, saved outputs, and exports.
+- Background update notification linked to the latest GitHub Release.
+- Bundled FFmpeg, ffprobe, and Deno runtime tools in the installer.
+
+### Changed
+
+- The v3 recording worker is now distributed as a separate executable and managed by the GUI.
+
 ## v2.1.3
 
 ### Added
