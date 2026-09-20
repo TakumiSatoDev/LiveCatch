@@ -55,7 +55,7 @@ class DesktopApp(TwitchWatchApp):
 
         frame = ttk.LabelFrame(
             self.settings_tab, text=self._t("バックグラウンド", "Background"), padding=10)
-        frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=4, pady=4)
+        frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=4, pady=4)
         ttk.Checkbutton(
             frame, text=self._t("×ボタンで終了せずトレイに格納（Windows）",
                                 "Close button hides to tray (Windows)"),
