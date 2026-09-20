@@ -11,6 +11,7 @@ import inspect
 import math
 import re
 from threading import Event
+from urllib.parse import parse_qs, urlsplit
 
 from .parallel import OrderedPrefetch
 from .snapshot import SnapshotBarrier, snapshot_fragments
@@ -30,16 +31,19 @@ def require_supported_version(version: str) -> None:
 
 
 @contextmanager
-def fragment_patch(cancel: Event, *, prefetch: int = 2, snapshot: bool = False, emit=lambda *_a, **_k: None):
+def fragment_patch(cancel: Event, *, prefetch: int = 2, snapshot: bool = False,
+                   catchup: bool = False, emit=lambda *_a, **_k: None):
     from yt_dlp.downloader.fragment import FragmentFD
     from yt_dlp.version import __version__
     require_supported_version(__version__)
-    with _patch_class(FragmentFD, cancel, prefetch=prefetch, snapshot=snapshot, emit=emit):
+    with _patch_class(
+            FragmentFD, cancel, prefetch=prefetch, snapshot=snapshot,
+            catchup=catchup, emit=emit):
         yield
 
 
 @contextmanager
-def _patch_class(cls, cancel: Event, *, prefetch: int, snapshot: bool, emit):
+def _patch_class(cls, cancel: Event, *, prefetch: int, snapshot: bool, catchup: bool, emit):
     original = cls.download_and_append_fragments
     multiple = cls.download_and_append_fragments_multiple
     append = cls._append_fragment
@@ -68,6 +72,14 @@ def _patch_class(cls, cancel: Event, *, prefetch: int, snapshot: bool, emit):
                 group = ctx.get("_lc_snapshot") or SnapshotBarrier(1, cancel)
                 fragments = snapshot_fragments(fragments, group, stream, emit)
 
+            stream_catchup = bool(catchup and (
+                info_dict.get("is_live")
+                or info_dict.get("is_from_start")
+                or ctx.get("live") in (True, "is_from_start")
+            ))
+            catchup_meta = ctx.setdefault("_lc_catchup_meta", {}) if stream_catchup else None
+            first_sequence = [None]
+
             def guarded():
                 iterator = iter(fragments)
                 while not cancel.is_set():
@@ -77,6 +89,38 @@ def _patch_class(cls, cancel: Event, *, prefetch: int, snapshot: bool, emit):
                         return
                     if cancel.is_set():
                         return
+                    if stream_catchup and isinstance(item, dict):
+                        frag_index = item.get("frag_index")
+                        target = item.get("fragment_count")
+                        sequence = None
+                        url = item.get("url")
+                        if isinstance(url, str):
+                            try:
+                                raw = parse_qs(urlsplit(url).query).get("sq", [None])[0]
+                                if raw is not None:
+                                    sequence = int(raw)
+                            except (TypeError, ValueError):
+                                sequence = None
+                        if sequence is None and isinstance(frag_index, int):
+                            sequence = frag_index
+                        if first_sequence[0] is None and isinstance(sequence, int):
+                            first_sequence[0] = sequence
+                        first = first_sequence[0]
+                        if (isinstance(frag_index, int) and isinstance(sequence, int)
+                                and isinstance(target, int) and target > 0 and isinstance(first, int)):
+                            # YouTube's live-from-start generator exposes the current
+                            # live-edge sequence as fragment_count. Normalize it to
+                            # the first actually available DVR sequence so truncated
+                            # DVR windows still reach 100%.
+                            if target >= first and sequence >= first:
+                                current = sequence - first + 1
+                                total = target - first + 1
+                                gap = max(0, target - sequence)
+                            else:
+                                current = frag_index
+                                total = target
+                                gap = max(0, total - current)
+                            catchup_meta[frag_index] = (current, total, gap)
                     yield item
 
             count = max(1, ctx.get("max_progress", 1))
@@ -104,8 +148,17 @@ def _patch_class(cls, cancel: Event, *, prefetch: int, snapshot: bool, emit):
             if "fragment_filename_sanitized" not in committed:
                 ctx.pop("fragment_filename_sanitized", None)
         total = ctx.get("total_frags") or ctx.get("fragment_count")
-        emit("fragment", stream=ctx.get("_lc_stream", "media"),
-             current=committed.get("fragment_index", 0), total=total, bytes=len(data))
+        stream = ctx.get("_lc_stream", "media")
+        committed_index = committed.get("fragment_index", 0)
+        emit("fragment", stream=stream, current=committed_index, total=total, bytes=len(data))
+        meta = ctx.get("_lc_catchup_meta")
+        if isinstance(meta, dict) and isinstance(committed_index, int):
+            catchup_info = meta.pop(committed_index, None)
+            if catchup_info:
+                current, target, gap = catchup_info
+                percent = min(100.0, max(0.0, current * 100 / max(1, target)))
+                emit("catchup", stream=stream, current=current, total=target,
+                     gap_fragments=gap, percent=percent, caught_up=gap <= 2)
         return result
 
     patched._livecatch_patch = True
