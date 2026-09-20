@@ -44,7 +44,8 @@ class TwitchWatchApp(LiveCatchApp):
         self.watch_manager = manager or WatchManager(manual_channels=self._manual_channels)
         self.watch_manager.configure(self.watch_config, Settings())
         super().__init__(store=store, update_checker=update_checker)
-        self.watch_manager.configure(self.watch_config, self.settings())
+        self.watch_manager.configure(
+            self.watch_config, apply_monitor_preset(self.settings(), self.watch_config.monitor_preset))
         if self._watch_load_error:
             messagebox.showwarning("LiveCatch", self._t(
                 "自動録画設定を読み込めません。元ファイルは変更しません。\n",
