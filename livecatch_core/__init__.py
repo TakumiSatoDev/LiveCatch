@@ -1,2 +1,2 @@
 """LiveCatch recording and media-processing services (no GUI side effects)."""
-__version__ = "3.3.1"
+__version__ = "3.4.0"

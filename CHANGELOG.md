@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.4.0
+
+### Added
+
+- Manual recording now shows progress inside each processing phase: completed phases are 100%, measurable download phases show their current percentage, and intrinsically indeterminate phases remain explicit instead of using fake percentages.
+- Live-from-start recording emits a dedicated live-edge catch-up percentage. YouTube DVR progress is normalized from the first actually available sequence to the current live-edge sequence, so truncated DVR windows still converge to 100%.
+- Automatic recordings expose a distinct `Catching up to live` state with catch-up percent / remaining fragments and switch to `LIVE` after reaching the edge.
+
+### Improved
+
+- Catch-up telemetry is throttled to protect the GUI under high fragment concurrency, while the final caught-up event is always delivered.
+
 ## v3.3.1
 
 ### Changed
