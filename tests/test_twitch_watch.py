@@ -396,17 +396,29 @@ def test_factory_failure_counts_towards_recording_attempt_limit():
     assert s.attempts == 3 and s.recording is None and s.status == 'retry_limit'
 
 
-def test_recording_progress_tracks_phase_fragments_and_speed():
+def test_recording_progress_tracks_phase_fragments_speed_and_catchup():
     h=Harness();s=h.live();w=s.recording.worker
+    w.events.put({'event':'streams','count':2})
     w.events.put({'event':'phase','name':'downloading'})
     w.events.put({'event':'progress','stream':'video','percent':42.5,
                   'fragment_index':85,'fragment_count':200,'speed':8*1024*1024})
     w.events.put({'event':'fragment','stream':'audio','current':40,'total':100,'bytes':4096})
+    w.events.put({'event':'catchup','stream':'video','percent':60.0,
+                  'current':60,'total':100,'gap_fragments':40,'caught_up':False})
+    w.events.put({'event':'catchup','stream':'audio','percent':55.0,
+                  'current':55,'total':100,'gap_fragments':45,'caught_up':False})
     h.tick()
-    assert s.status=='recording' and s.phase=='downloading'
+    assert s.status=='catching_up' and s.phase=='downloading' and not s.caught_up
     assert s.progress['video']['percent']==42.5
     assert s.progress['video']['fragment_index']==85
     assert s.progress['audio']['percent']==40.0
+    assert s.catchup['audio']['percent']==55.0
+    w.events.put({'event':'catchup','stream':'video','percent':100.0,
+                  'current':100,'total':100,'gap_fragments':0,'caught_up':True})
+    w.events.put({'event':'catchup','stream':'audio','percent':100.0,
+                  'current':100,'total':100,'gap_fragments':0,'caught_up':True})
+    h.tick()
+    assert s.caught_up and s.status=='recording'
     w.events.put({'event':'phase','name':'postprocessing'});h.tick()
     assert s.status=='postprocessing'
 
