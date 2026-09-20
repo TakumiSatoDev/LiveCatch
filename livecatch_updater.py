@@ -13,6 +13,7 @@ import time
 
 
 REPLACE_FILES = {"LiveCatch.exe", "LiveCatchWorker.exe", "LiveCatchUpdater.exe"}
+INSTALL_RETRY_SECONDS = 90.0
 
 
 def _wait_for_parent(pid: int) -> None:
@@ -82,6 +83,29 @@ def _install(payload: Path, target: Path) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
+def _install_with_retry(payload: Path, target: Path, *, timeout: float = INSTALL_RETRY_SECONDS) -> None:
+    """Install after Windows releases image/file handles left by the old app.
+
+    The GUI waits for the application process, but Windows can keep an image
+    section or a worker/tool handle locked briefly after process termination.
+    Retry only sharing/access errors; missing files and malformed payloads must
+    fail immediately instead of being hidden by a retry loop.
+    """
+    deadline = time.monotonic() + max(0.0, timeout)
+    delay = 0.25
+    while True:
+        try:
+            _install(payload, target)
+            return
+        except PermissionError as exc:
+            if os.name != "nt" or getattr(exc, "winerror", None) not in (5, 32):
+                raise
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 1.5, 2.0)
+
+
 def _schedule_cleanup(root: Path) -> None:
     if os.name != "nt":
         shutil.rmtree(root, ignore_errors=True)
@@ -111,7 +135,7 @@ def main() -> int:
     root = args.payload_dir.parent
     try:
         _wait_for_parent(args.pid)
-        _install(args.payload_dir, args.target_dir)
+        _install_with_retry(args.payload_dir, args.target_dir)
         executable = args.target_dir / "LiveCatch.exe"
         subprocess.Popen([str(executable)], cwd=str(args.target_dir), close_fds=True)
         _schedule_cleanup(root)
