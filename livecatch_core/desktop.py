@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from queue import Empty
 import sys
 from time import monotonic
@@ -11,8 +12,9 @@ from tkinter import messagebox, ttk
 from .background import BackgroundConfig, BackgroundStore, InstanceLease, TrayController, WindowsStartup
 from .channels import broadcast_key, manual_target, parse_targets
 from .gui import LiveCatchApp
-from .twitch_watch import WatchChannel
+from .twitch_watch import WatchChannel, WatchManager, WatchStore, apply_monitor_preset
 from .twitch_watch_gui import STATUS, TwitchWatchApp
+from .ui_text import configure_windows_utf8
 
 STATUS.update({"upcoming": ("配信開始待ち", "Upcoming"), "duplicate": ("同じ配信を録画中", "Same broadcast recording")})
 
@@ -39,8 +41,9 @@ class DesktopApp(TwitchWatchApp):
 
     def _build(self):
         super()._build()
-        self.notebook.tab(3, text=self._t("YouTube / Twitch 自動録画", "YouTube / Twitch auto-record"))
-        # Existing Twitch registrations and settings remain in their original store.
+        self.notebook.tab(self.watch_tab, text=self._t(
+            "YouTube / Twitch 自動録画", "YouTube / Twitch auto-record"))
+
         if not hasattr(self, "close_to_tray"):
             self.close_to_tray = tk.BooleanVar(value=self.background_config.close_to_tray)
             self.start_hidden = tk.BooleanVar(value=self.background_config.start_hidden)
@@ -49,39 +52,54 @@ class DesktopApp(TwitchWatchApp):
             except OSError:
                 enabled = False
             self.login_startup = tk.BooleanVar(value=enabled)
-        frame = ttk.Frame(self.notebook, padding=12)
-        self.notebook.add(frame, text=self._t("バックグラウンド", "Background"))
-        ttk.Label(frame, wraplength=900, text=self._t(
-            "自動録画にはYouTubeのチャンネルURL・@handle、Twitchのチャンネル名・URLを登録できます。\n"
-            "YouTubeの登録チャンネル一覧の自動インポートではありません。@handleはYouTubeとして扱います。",
-            "Register YouTube channel URLs/@handles and Twitch names/URLs in auto-record.\n"
-            "This does not import account subscriptions. Bare @handles mean YouTube.")).pack(anchor="w", pady=8)
-        ttk.Checkbutton(frame, text=self._t("×ボタンで終了せずトレイに格納（Windows）", "Close button hides to tray (Windows)"),
-                        variable=self.close_to_tray).pack(anchor="w", pady=4)
-        ttk.Checkbutton(frame, text=self._t("次回はトレイに格納して起動", "Start hidden on next launch"),
-                        variable=self.start_hidden).pack(anchor="w", pady=4)
-        ttk.Checkbutton(frame, text=self._t("Windowsログイン時に起動", "Launch on Windows login"),
-                        variable=self.login_startup, state="normal" if sys.platform == "win32" else "disabled").pack(anchor="w", pady=4)
+
+        frame = ttk.LabelFrame(
+            self.settings_tab, text=self._t("バックグラウンド", "Background"), padding=10)
+        frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=4, pady=4)
+        ttk.Checkbutton(
+            frame, text=self._t("×ボタンで終了せずトレイに格納（Windows）",
+                                "Close button hides to tray (Windows)"),
+            variable=self.close_to_tray).grid(row=0, column=0, sticky="w", padx=(0, 12), pady=3)
+        ttk.Checkbutton(
+            frame, text=self._t("次回はトレイに格納して起動", "Start hidden on next launch"),
+            variable=self.start_hidden).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=3)
+        ttk.Checkbutton(
+            frame, text=self._t("Windowsログイン時に起動", "Launch on Windows login"),
+            variable=self.login_startup,
+            state="normal" if sys.platform == "win32" else "disabled").grid(
+                row=1, column=0, sticky="w", padx=(0, 12), pady=3)
         row = ttk.Frame(frame)
-        row.pack(fill="x", pady=8)
-        for ja, en, command in (("設定を適用", "Apply settings", self._apply_background),
-                                ("今すぐトレイに格納", "Hide to tray", self._hide_to_tray),
-                                ("終了", "Exit", self._request_exit)):
-            ttk.Button(row, text=self._t(ja, en), command=command).pack(side="left", padx=(0, 8))
+        row.grid(row=1, column=1, sticky="e", pady=3)
+        for ja, en, command in (
+            ("設定を適用", "Apply settings", self._apply_background),
+            ("今すぐトレイに格納", "Hide to tray", self._hide_to_tray),
+            ("終了", "Exit", self._request_exit),
+        ):
+            ttk.Button(row, text=self._t(ja, en), command=command).pack(side="left", padx=(0, 6))
         ttk.Label(frame, wraplength=900, text=self._t(
-            "自動で監視するには、自動録画タブの「アプリ起動時に監視再開」も有効にして保存してください。\n"
-            "ウィンドウ非表示・画面オフでも動きますが、PCのスリープ・電源オフ・サインアウト中は動作しません。\n"
-            "トレイから表示・監視停止・終了が可能です。トレイ起動に失敗した場合は画面を隠しません。",
-            "Also save 'Monitor on app startup' in auto-record to begin monitoring automatically.\n"
-            "Hidden windows/display-off work; sleep, shutdown and sign-out do not.\n"
-            "Use the tray to open, pause or exit. Tray failure keeps/restores the window.")).pack(anchor="w", pady=8)
+            "自動監視の起動設定・トレイ常駐をここに集約しています。PCのスリープ・電源オフ・サインアウト中は動作しません。",
+            "Auto-monitor startup and tray settings are consolidated here. Monitoring stops during sleep, shutdown or sign-out."
+        )).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
     def _watch_add(self):
         try:
             names = parse_targets(self.watch_input.get())
-            existing = {c.login for c in self.watch_config.channels}
-            channels = self.watch_config.channels + tuple(WatchChannel(n) for n in names if n not in existing)
-            self._commit_watch_config(self._watch_values(channels))
+            existing = {item.login for item in self.watch_config.channels}
+            additions = tuple(WatchChannel(name) for name in names if name not in existing)
+            if not additions:
+                self.watch_input.set("")
+                return
+            channels = self.watch_config.channels + additions
+            if self.watch_manager.running:
+                config = replace(self.watch_config, channels=channels)
+                config.validate()
+                self.watch_store.save(config)
+                settings = apply_monitor_preset(self.settings(), config.monitor_preset)
+                self.watch_manager.add_channels(additions, settings)
+                self.watch_config = config
+                self._render_watch()
+            else:
+                self._commit_watch_config(self._watch_values(channels))
             self.watch_input.set("")
         except (ValueError, OSError) as exc:
             messagebox.showerror("LiveCatch", str(exc))
@@ -227,10 +245,47 @@ class DesktopApp(TwitchWatchApp):
             super().destroy()
 
 
+def _ui_encoding_smoke() -> int:
+    """Validate Japanese text round-trips through Tk in the packaged executable."""
+    from pathlib import Path
+    import tempfile
+    from .config import ConfigStore
+
+    class NoStartup:
+        def enabled(self): return False
+        def set_enabled(self, _enabled): pass
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        app = DesktopApp(
+            store=ConfigStore(root / "config.json"),
+            watch_store=WatchStore(root / "watch.json"),
+            manager=WatchManager(),
+            background_store=BackgroundStore(root / "background.json"),
+            startup=NoStartup(),
+            update_checker=lambda _version: None,
+        )
+        try:
+            app.update_idletasks()
+            checks = (
+                app.notebook.tab(app.record_tab, "text") == "\u9332\u753b",
+                app.notebook.tab(app.settings_tab, "text") == "\u8a2d\u5b9a",
+                app.notebook.tab(app.watch_tab, "text") == "YouTube / Twitch \u81ea\u52d5\u9332\u753b",
+                str(app.start_button.cget("text")) == "\u958b\u59cb",
+            )
+            return 0 if all(checks) else 4
+        finally:
+            app.destroy()
+
+
 def main(argv=None):
+    configure_windows_utf8()
     parser = argparse.ArgumentParser(prog="LiveCatch")
     parser.add_argument("--background", action="store_true", help="Hide to Windows tray after it is ready")
+    parser.add_argument("--ui-encoding-smoke", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if args.ui_encoding_smoke:
+        return _ui_encoding_smoke()
     lease = InstanceLease()
     try:
         lease.acquire()
