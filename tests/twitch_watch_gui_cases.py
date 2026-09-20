@@ -52,6 +52,7 @@ def test_watch_tab_registration_persistence_and_language(app):
     app.vars['language'].set('en'); app._rebuild(); app.update()
     app.notebook.select(app.watch_tab); app.update()
     assert app.watch_tree.winfo_ismapped()
+    assert app.watch_open_folder_button.winfo_ismapped()
     assert not app.start_button.winfo_ismapped()
     app.notebook.select(app.record_tab); app.update()
     assert app.start_button.winfo_ismapped()
