@@ -6,7 +6,7 @@ A fresh Supervisor owns every probe/recording; old results cannot own a new job.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 import json
 import os
@@ -31,10 +31,10 @@ PROBE_TIMEOUT = 45.0
 MAX_ATTEMPTS = 3
 MONITOR_PRESETS = {
     "manual": None,
-    "balanced": (32, 3, 2, "balanced"),
-    "fast": (64, 4, 3, "fast"),
-    "extreme": (96, 6, 4, "fast"),
-    "max": (128, 8, 6, "max_speed"),
+    "balanced": (32, 3),
+    "fast": (64, 4),
+    "extreme": (96, 6),
+    "max": (128, 8),
 }
 CATCHUP_MODES = ("from_start", "live_edge")
 _RESERVED = {"videos", "directory", "downloads", "settings", "inventory", "subscriptions",
@@ -151,15 +151,17 @@ def apply_monitor_preset(base: Settings, preset: str) -> Settings:
         raise ValueError("Invalid monitoring preset")
     values = MONITOR_PRESETS[preset]
     if values is None:
-        return base
-    fragments, prefetch, gpu_jobs, gpu_preset = values
-    return replace(base, concurrent_fragments=fragments, prefetch=prefetch,
-                   gpu_jobs=gpu_jobs, gpu_preset=gpu_preset)
+        return replace(base, gpu_export="off")
+    fragments, prefetch = values
+    return replace(base, concurrent_fragments=fragments, prefetch=prefetch, gpu_export="off")
 
 
 def channel_settings(base: Settings, login: str, stream_id: str | None = None, *, catchup: bool = False) -> Settings:
     login = normalize_target(login)
-    settings = replace(base, url=target_url(login), mode="reservation", live_from_start=bool(catchup))
+    settings = replace(
+        base, url=target_url(login), mode="reservation",
+        live_from_start=bool(catchup), gpu_export="off",
+    )
     if stream_id is not None:
         if not valid_broadcast_id(login, stream_id):
             raise ValueError("Missing/invalid broadcast ID")
@@ -211,6 +213,8 @@ class ChannelState:
     probe: Job | None = None
     recording: Job | None = None
     last_elapsed: float = 0.0
+    phase: str = ""
+    progress: dict[str, dict] = field(default_factory=dict)
 
 
 class WatchManager:
@@ -408,7 +412,36 @@ class WatchManager:
             if kind == "done":
                 job.terminal = event
             elif kind == "phase" and s.status != "stopping":
-                s.status = "exporting" if event.get("name") == "exporting" else "recording"
+                phase = str(event.get("name") or "")
+                s.phase = phase
+                s.status = {
+                    "starting": "record_starting",
+                    "extracting": "record_extracting",
+                    "downloading": "recording",
+                    "postprocessing": "postprocessing",
+                    "exporting": "postprocessing",
+                }.get(phase, "recording")
+            elif kind in ("progress", "fragment"):
+                stream = str(event.get("stream") or "media")
+                progress = s.progress.setdefault(stream, {})
+                if kind == "progress":
+                    for key in ("percent", "downloaded_bytes", "total_bytes", "speed",
+                                "fragment_index", "fragment_count"):
+                        value = event.get(key)
+                        if value is not None:
+                            progress[key] = value
+                else:
+                    current = event.get("current")
+                    total = event.get("total")
+                    if isinstance(current, int):
+                        progress["fragment_index"] = current
+                    if isinstance(total, int) and total > 0:
+                        progress["fragment_count"] = total
+                        if isinstance(current, int):
+                            progress["percent"] = min(100.0, max(0.0, current * 100 / total))
+                    size = event.get("bytes")
+                    if isinstance(size, int) and size >= 0:
+                        progress["committed_bytes"] = int(progress.get("committed_bytes", 0)) + size
             elif kind in ("error", "warning", "output", "exported"):
                 message = str(event.get("message") or event.get("path", kind))
                 s.detail = redact(message)[:400]
@@ -465,7 +498,10 @@ class WatchManager:
                             catchup=self.config.catchup_mode == "from_start",
                         ))
                         s.recording = Job(worker, now, self.generation)
-                        s.status = "recording"
+                        s.phase = "starting"
+                        s.progress.clear()
+                        s.last_elapsed = 0.0
+                        s.status = "record_starting"
                         self._log(c.login, f"Started broadcast {s.stream_id} (attempt {s.attempts}/{MAX_ATTEMPTS})")
                     except Exception as exc:
                         s.retry_at = now + max(60, self.config.interval)
