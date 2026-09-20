@@ -57,14 +57,17 @@ class ExportOptions:
     height: int = 0
     device: int = 0
     jobs: int = 1
+    preset: str = "balanced"
 
     def validate(self):
         if self.mode not in ("auto", "cuda", "cpu"):
             raise ValueError("Export mode must be auto, cuda or cpu")
         if self.height not in (0, 360, 480, 720, 1080, 1440, 2160):
             raise ValueError("Unsupported export height")
-        if not 0 <= self.device <= 31 or not 1 <= self.jobs <= 4:
+        if not 0 <= self.device <= 31 or not 1 <= self.jobs <= 8:
             raise ValueError("Invalid GPU device / job count")
+        if self.preset not in ("balanced", "fast", "max_speed"):
+            raise ValueError("Invalid GPU speed preset")
 
 
 def export_command(ffmpeg: str, source: Path, target: Path, options: ExportOptions,
@@ -80,8 +83,10 @@ def export_command(ffmpeg: str, source: Path, target: Path, options: ExportOptio
             "-map_chapters", "0"]
     height = str(options.height) if options.height else "ih"
     if backend == "cuda":
+        nvenc_preset = {"balanced": "p4", "fast": "p2", "max_speed": "p1"}[options.preset]
         cmd += ["-vf", f"scale_cuda=w=-2:h={height}:format=yuv420p", "-c:v", "h264_nvenc",
-                "-gpu", str(options.device), "-preset", "p4", "-rc", "vbr", "-cq", "23", "-b:v", "0"]
+                "-gpu", str(options.device), "-preset", nvenc_preset,
+                "-rc", "vbr", "-cq", "23", "-b:v", "0"]
     else:
         cmd += ["-vf", f"scale=w=-2:h={height},format=yuv420p", "-c:v", "libx264",
                 "-preset", "veryfast", "-crf", "23", "-threads", "2"]
