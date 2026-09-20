@@ -40,14 +40,21 @@ with tempfile.TemporaryDirectory() as directory:
                    manager=manager,background_store=BackgroundStore(root/'background.json'),tray=tray,startup=startup)
     try:
         app.update()
-        assert len(app.notebook.tabs())==5 and startup.writes==[]
+        assert len(app.notebook.tabs())==3 and startup.writes==[]
         case=sys.argv[1]
         if case=='mixed':
             app.watch_input.set('example @Example');app._watch_add()
             assert [c.login for c in app.watch_config.channels]==['example','youtube:@example']
             app.vars['language'].set('en');app._rebuild();app.update()
-            assert 'YouTube' in app.notebook.tab(3,'text')
+            assert 'YouTube' in app.notebook.tab(app.watch_tab,'text')
             assert len(app.watch_tree.get_children())==2
+        elif case=='liveadd':
+            app.watch_input.set('example');app._watch_add();app._watch_start()
+            assert manager.running and 'example' in manager.states
+            app.watch_input.set('@Example');app._watch_add()
+            assert 'youtube:@example' in manager.states
+            now[0]+=1;manager.tick()
+            assert manager.states['youtube:@example'].probe is not None
         elif case in {'tray','failure'}:
             app.background_config=BackgroundConfig(close_to_tray=True)
             app.watch_input.set('@Example');app._watch_add();app._watch_start()
