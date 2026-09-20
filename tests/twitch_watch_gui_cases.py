@@ -41,7 +41,7 @@ def app(tmp_path, monkeypatch):
 
 
 def test_watch_tab_registration_persistence_and_language(app):
-    assert len(app.notebook.tabs()) == 4
+    assert len(app.notebook.tabs()) == 3
     assert not app.watch_manager.running
     app.watch_input.set('alice,https://twitch.tv/Bob alice')
     app._watch_add()
@@ -50,7 +50,7 @@ def test_watch_tab_registration_persistence_and_language(app):
     app.watch_tree.selection_set('bob'); app._watch_toggle()
     assert app.watch_config.channels[1].enabled is False
     app.vars['language'].set('en'); app._rebuild(); app.update()
-    app.notebook.select(3); app.update()
+    app.notebook.select(app.watch_tab); app.update()
     assert app.watch_tree.winfo_ismapped() and app.start_button.winfo_ismapped()
     assert app.watch_tree.get_children() == ('alice','bob')
     app.watch_tree.selection_set('bob'); app._watch_remove()
@@ -65,6 +65,9 @@ def test_gui_start_detection_stop_and_retry(app):
     s.probe.worker.finish(result={'status':'live','stream_id':'1234','title':'Synthetic'})
     manager.tick(); app._render_watch()
     assert s.recording is not None
+    assert s.recording.worker.settings.live_from_start is True
+    app._render_watch()
+    assert app.watch_tree.set('alice','elapsed') == '00:00'
     app.watch_tree.selection_set('alice'); app._watch_selected_stop()
     assert s.recording.worker.stopped
     s.recording.worker.finish('cancelled'); manager.tick()
