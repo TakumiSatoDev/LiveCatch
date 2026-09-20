@@ -18,13 +18,17 @@ def test_urls(url):
 def test_bad_urls(url):
     with pytest.raises(ValueError): normalize_url(url)
 
-@pytest.mark.parametrize('changes', [dict(concurrent_fragments=0),dict(concurrent_fragments=128),dict(concurrent_fragments=True),dict(prefetch=0),dict(language='xx'),dict(gpu_export='magic'),dict(gpu_jobs=5),dict(export_height=17),dict(wait_seconds=1),dict(mode='catchup_stop',engine='stock'),dict(save_dir=''),dict(use_temp_dir=True,temp_dir='')])
+@pytest.mark.parametrize('changes', [dict(concurrent_fragments=0),dict(concurrent_fragments=129),dict(concurrent_fragments=True),dict(prefetch=0),dict(prefetch=9),dict(language='xx'),dict(gpu_export='magic'),dict(gpu_jobs=9),dict(gpu_preset='warp'),dict(export_height=17),dict(wait_seconds=1),dict(mode='catchup_stop',engine='stock'),dict(save_dir=''),dict(use_temp_dir=True,temp_dir='')])
 def test_validation(changes):
     with pytest.raises(ValueError): replace(Settings(url='https://youtu.be/test'),**changes).validate()
 
 @pytest.mark.parametrize('data', [[], {'wait_seconds':'30'}, {'cookies_from_browser':'true'}, {'concurrent_fragments':True}])
 def test_config_types(data):
     with pytest.raises(ValueError): Settings.from_dict(data)
+
+def test_extreme_limits_are_explicitly_allowed():
+    replace(Settings(url='https://youtu.be/test'), concurrent_fragments=128, prefetch=8,
+            gpu_jobs=8, gpu_preset='max_speed').validate()
 
 def test_migration_atomic_preserve(tmp_path):
     path=tmp_path/'settings.json'; store=ConfigStore(path)
