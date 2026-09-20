@@ -217,6 +217,10 @@ class ChannelState:
     last_elapsed: float = 0.0
     phase: str = ""
     progress: dict[str, dict] = field(default_factory=dict)
+    catchup: dict[str, dict] = field(default_factory=dict)
+    catchup_active: bool = False
+    caught_up: bool = False
+    stream_count: int = 0
 
 
 class WatchManager:
@@ -416,13 +420,33 @@ class WatchManager:
             elif kind == "phase" and s.status != "stopping":
                 phase = str(event.get("name") or "")
                 s.phase = phase
-                s.status = {
-                    "starting": "record_starting",
-                    "extracting": "record_extracting",
-                    "downloading": "recording",
-                    "postprocessing": "postprocessing",
-                    "exporting": "postprocessing",
-                }.get(phase, "recording")
+                if phase == "downloading" and s.catchup_active and not s.caught_up:
+                    s.status = "catching_up"
+                else:
+                    s.status = {
+                        "starting": "record_starting",
+                        "extracting": "record_extracting",
+                        "downloading": "recording",
+                        "postprocessing": "postprocessing",
+                        "exporting": "postprocessing",
+                    }.get(phase, "recording")
+            elif kind == "streams":
+                count = event.get("count")
+                if isinstance(count, int) and count > 0:
+                    s.stream_count = count
+            elif kind == "catchup":
+                stream = str(event.get("stream") or "media")
+                progress = s.catchup.setdefault(stream, {})
+                progress.update(event)
+                expected = s.stream_count
+                states = list(s.catchup.values())
+                s.caught_up = bool(
+                    states
+                    and (not expected or len(states) >= expected)
+                    and all(item.get("caught_up") is True for item in states)
+                )
+                if s.caught_up and s.status != "stopping":
+                    s.status = "recording"
             elif kind in ("progress", "fragment"):
                 stream = str(event.get("stream") or "media")
                 progress = s.progress.setdefault(stream, {})
@@ -502,6 +526,10 @@ class WatchManager:
                         s.recording = Job(worker, now, self.generation)
                         s.phase = "starting"
                         s.progress.clear()
+                        s.catchup.clear()
+                        s.stream_count = 0
+                        s.catchup_active = self.config.catchup_mode == "from_start"
+                        s.caught_up = not s.catchup_active
                         s.last_elapsed = 0.0
                         s.status = "record_starting"
                         self._log(c.login, f"Started broadcast {s.stream_id} (attempt {s.attempts}/{MAX_ATTEMPTS})")
