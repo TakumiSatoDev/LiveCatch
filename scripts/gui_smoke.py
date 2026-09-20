@@ -10,8 +10,11 @@ with tempfile.TemporaryDirectory() as directory:
     try:
         app.update()
         assert app.settings().gpu_export=='off'
+        assert app.notebook.tab(app.record_tab,'text')=='録画'
+        assert app.notebook.tab(app.settings_tab,'text')=='設定'
+        assert str(app.start_button.cget('text'))=='開始'
         app.vars['language'].set('en');app._rebuild();app.update()
-        app.notebook.select(2);app.update()
+        app.notebook.select(app.settings_tab);app.update()
         assert app.settings().language=='en'
         assert app.winfo_width()>=840 and app.start_button.winfo_ismapped()
         print('Tk GUI smoke passed')
