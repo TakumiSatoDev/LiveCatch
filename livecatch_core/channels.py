@@ -106,3 +106,41 @@ def manual_target(value: str) -> str | None:
         return normalize_target(value)
     except (ValueError, UnicodeError):
         return None
+
+
+def validate_recording_url(value: str) -> str:
+    """Reject collection-like YouTube URLs from the single-recording worker.
+
+    A bare channel page makes yt-dlp enumerate Videos/Streams/Shorts, which is
+    never the intended behavior of LiveCatch's manual single-recording button.
+    Channel /live aliases are allowed; persistent channel monitoring belongs in
+    the automatic-recording tab.
+    """
+    if not isinstance(value, str):
+        raise ValueError("Recording URL must be text")
+    url = value.strip()
+    parsed = urlsplit(url if "://" in url else "https://" + url)
+    host = (parsed.hostname or "").lower()
+    if host not in YOUTUBE_HOSTS:
+        return value
+
+    query = parse_qs(parsed.query)
+    if "list" in query and not query.get("v"):
+        raise ValueError(
+            "YouTube playlists are not supported by single recording. "
+            "Use one video/live URL at a time."
+        )
+
+    path = parsed.path.rstrip("/")
+    parts = [part for part in path.split("/") if part]
+    if parts and parts[-1] == "live" and len(parts) > 1:
+        return value
+
+    try:
+        youtube_target(value)
+    except (ValueError, UnicodeError):
+        return value
+    raise ValueError(
+        "A YouTube channel URL would enumerate the channel archive. "
+        "Use a video/live URL, or register the channel in the automatic-recording tab."
+    )
