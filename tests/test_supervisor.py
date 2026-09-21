@@ -8,6 +8,7 @@ from livecatch_core.supervisor import Supervisor
 CHILD='''import json,sys,time
 config=json.loads(sys.stdin.readline())
 print(json.dumps({'event':'ready'}),flush=True)
+print(json.dumps({'event':'unicode','message':'日本語 ⧸ UTF-8'},ensure_ascii=False),flush=True)
 if config['url'].endswith('/crash'):
  print(json.dumps({'event':'done','status':'completed','code':0}),flush=True)
  sys.exit(7)
@@ -41,6 +42,20 @@ def test_stop_then_restart_has_no_stale_kill(supervisor):
     s.start(cfg);assert s.proc.pid!=first
     time.sleep(.1);assert s.active
     s.stop();assert wait_done(s)['status']=='cancelled'
+
+def test_worker_environment_transports_unicode(supervisor):
+    supervisor.start(Settings(url='https://youtu.be/first'))
+    end=time.monotonic()+3
+    found=None
+    while time.monotonic()<end and found is None:
+        for event in supervisor.events.drain():
+            if event.get('event')=='unicode':
+                found=event.get('message')
+        time.sleep(.01)
+    assert found=='日本語 ⧸ UTF-8'
+    supervisor.stop()
+    assert wait_done(supervisor)['status']=='cancelled'
+
 
 def test_child_error_overrides_completed_event(supervisor):
     supervisor.start(Settings(url='https://youtu.be/crash'))
