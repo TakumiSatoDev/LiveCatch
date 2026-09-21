@@ -46,7 +46,7 @@ LABELS = {
     "temp_dir": ("一時保存先", "Temp folder"), "wait_seconds": ("予約確認間隔（秒）", "Reservation interval (seconds)"),
     "cookies_from_browser": ("ブラウザCookieを使う", "Use browser cookies"), "browser": ("ブラウザ", "Browser"),
     "live_from_start": ("予約録画でも先頭から取得", "Reservation: try from start"),
-    "write_info_json": ("info.jsonを書き出す", "Write info.json"), "embed_metadata": ("メタデータを埋め込む", "Embed metadata"),
+    "write_info_json": ("info.jsonを書き出す", "Write info.json"), "embed_metadata": ("メタデータを動画へ埋め込む（完了後に全体を書き直す）", "Embed metadata into media (rewrites the full file after download)"),
     "lightweight_catchup_postprocess": ("現在まで取得ではメタデータ省略", "Snapshot: skip metadata"),
     "quality_preset": ("画質", "Quality"), "output_format": ("保存形式", "Container"),
     "concurrent_fragments": ("同時fragment数（1〜256）", "Fragment concurrency (1–256)"),
