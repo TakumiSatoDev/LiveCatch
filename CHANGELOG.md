@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.5.3
+
+### Fixed
+
+- YouTube automatic recording now detects repeated fragment HTTP 401/403 failures and aborts the high-parallel retry storm early.
+- The next retry re-probes the same broadcast and uses a bounded recovery mode: live edge, at most 4 concurrent fragments, prefetch at most 2, and a combined A/V format preferred while respecting the configured height cap.
+- Repeated identical downloader errors are coalesced instead of flooding the watch log; recovery mode also aborts quickly if YouTube rejects it.
+- Recovery is scoped to the same YouTube broadcast and resets when the broadcast ID changes or the user explicitly retries.
+
 ## v3.5.2
 
 ### Fixed
