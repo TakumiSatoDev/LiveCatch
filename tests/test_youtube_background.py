@@ -10,7 +10,10 @@ import time
 import pytest
 
 from livecatch_core.background import BackgroundConfig, BackgroundStore, InstanceLease, TrayController, WindowsStartup, startup_command, RUN_NAME
-from livecatch_core.channels import broadcast_key, manual_target, normalize_target, parse_targets, target_url, valid_broadcast_id, youtube_target
+from livecatch_core.channels import (
+    broadcast_key, manual_target, normalize_target, parse_targets, target_url,
+    valid_broadcast_id, validate_recording_url, youtube_target,
+)
 from livecatch_core.config import Settings
 from livecatch_core.events import EventBuffer
 from livecatch_core.twitch_watch import (
@@ -48,6 +51,15 @@ def test_mixed_parse_and_unicode():
 def test_manual_video_identity(url):
     assert manual_target(url)==broadcast_key('youtube:',VIDEO)
     assert manual_target('https://other.invalid/watch?v='+VIDEO) is None
+
+
+def test_single_recording_rejects_youtube_channel_archive_urls():
+    with pytest.raises(ValueError, match='channel archive'):
+        validate_recording_url('https://www.youtube.com/@Kokage_Tsumugi')
+    with pytest.raises(ValueError, match='playlists'):
+        validate_recording_url('https://www.youtube.com/playlist?list=PL123')
+    assert validate_recording_url('https://www.youtube.com/@Kokage_Tsumugi/live').endswith('/live')
+    assert validate_recording_url('https://www.youtube.com/watch?v='+VIDEO).endswith(VIDEO)
 
 
 def test_watch_store_keeps_twitch_and_unknown_fields(tmp_path):
