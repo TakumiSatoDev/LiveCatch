@@ -65,14 +65,18 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
                     emit("warning", message=(
                         "YouTube media fragments were rejected (HTTP 401/403). "
                         "LiveCatch will stop this burst instead of retrying every fragment."))
-                if (self.auth_failures >= 3 and not youtube_recovery
-                        and not recovery_abort.is_set()):
+                if self.auth_failures >= 3 and not recovery_abort.is_set():
                     recovery_abort.set()
-                    emit("youtube_recovery", reason="fragment_auth",
-                         count=self.auth_failures)
-                    emit("warning", message=(
-                        "Switching the next retry to YouTube recovery mode: "
-                        "fresh live-edge URLs, <=4 fragment workers, combined A/V format preferred."))
+                    if not youtube_recovery:
+                        emit("youtube_recovery", reason="fragment_auth",
+                             count=self.auth_failures)
+                        emit("warning", message=(
+                            "Switching the next retry to YouTube recovery mode: "
+                            "fresh live-edge URLs, <=4 fragment workers, combined A/V format preferred."))
+                    else:
+                        emit("warning", message=(
+                            "YouTube recovery mode was also rejected; "
+                            "aborting this attempt instead of flooding fragment retries."))
                     cancel.set()
                 return
 
@@ -209,10 +213,15 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
             except (KeyboardInterrupt, CancelledError):
                 if recovery_abort.is_set():
                     raise RuntimeError(
-                        "YouTube fragment authorization failed; recovery retry requested")
+                        "YouTube fragment authorization failed; "
+                        + ("recovery mode also failed" if youtube_recovery
+                           else "recovery retry requested"))
                 raise
     if recovery_abort.is_set():
-        raise RuntimeError("YouTube fragment authorization failed; recovery retry requested")
+        raise RuntimeError(
+            "YouTube fragment authorization failed; "
+            + ("recovery mode also failed" if youtube_recovery
+               else "recovery retry requested"))
     if code:
         return code
     if cancel.is_set():
