@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.5.2
+
+### Fixed
+
+- Manual single-recording now rejects bare YouTube channel/archive URLs instead of letting yt-dlp enumerate Videos / Streams / Shorts.
+- Recording workers force UTF-8 stdin/stdout/stderr and are spawned with an explicit UTF-8 Python environment, preventing CP932 `UnicodeEncodeError` failures on characters such as `⧸`.
+- YouTube channel monitoring remains bounded to `/live` probing and the validated single `watch?v=VIDEO_ID` recording target.
+
 ## v3.5.1
 
 ### Fixed
