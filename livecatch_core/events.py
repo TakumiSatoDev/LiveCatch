@@ -46,8 +46,9 @@ class Emitter:
                     return
                 self.pending.pop(key, None)
                 self.last[key] = now
-            else:
-                # Flush coalesced final samples before a phase change or DONE.
+            elif kind not in ('log', 'watch_log'):
+                # Logs must not defeat rate limits. Flush final samples only
+                # before ordered controls (phase changes, outputs, DONE, etc.).
                 for pending_kind, pending_data in self.pending.values():
                     self._write(pending_kind, pending_data)
                 self.pending.clear()
