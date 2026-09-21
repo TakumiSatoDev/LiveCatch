@@ -28,7 +28,7 @@ def wait_done(s,seconds=3):
 
 @pytest.fixture
 def supervisor(tmp_path):
-    child=tmp_path/'child.py';child.write_text(CHILD)
+    child=tmp_path/'child.py';child.write_text(CHILD,encoding='utf-8')
     s=Supervisor([sys.executable,'-u',str(child)])
     yield s
     if s.active:s.force_stop();wait_done(s)
