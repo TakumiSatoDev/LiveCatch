@@ -42,9 +42,13 @@ class Supervisor:
             self._forced = False
         try:
             flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+            env = os.environ.copy()
+            env["PYTHONUTF8"] = "1"
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["PYTHONUNBUFFERED"] = "1"
             proc = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                                    errors="replace", bufsize=1, **flags)
+                                    errors="replace", bufsize=1, env=env, **flags)
             with self.lock:
                 self.proc = proc
             proc.stdin.write(json.dumps(settings.to_dict(), ensure_ascii=False) + "\n")
