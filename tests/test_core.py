@@ -36,6 +36,18 @@ def test_legacy_gpu_export_is_disabled_on_load():
     assert cfg.gpu_export=='off'
 
 
+def test_metadata_embedding_is_opt_in_and_old_config_migrates_off(tmp_path):
+    assert Settings().embed_metadata is False
+
+    path=tmp_path/'settings.json'
+    path.write_text(json.dumps({'schema_version':3,'embed_metadata':True}))
+    migrated=ConfigStore(path).load()
+    assert migrated.schema_version==4
+    assert migrated.embed_metadata is False
+
+    explicit=Settings.from_dict({'schema_version':4,'embed_metadata':True})
+    assert explicit.embed_metadata is True
+
 def test_extreme_limits_are_explicitly_allowed():
     replace(Settings(url='https://youtu.be/test'), concurrent_fragments=256, prefetch=8,
             gpu_jobs=8, gpu_preset='max_speed').validate()
@@ -73,6 +85,9 @@ def test_api_options(tmp_path):
     assert opts['paths']['temp']==str(tmp_path/'cache')
     assert opts['skip_unavailable_fragments'] is False and opts['overwrites'] is False
     assert opts['postprocessors'][0]['preferedformat']=='mp4'
+    assert not any(pp['key']=='FFmpegMetadata' for pp in opts['postprocessors'])
+    with_metadata=ydl_options(replace(cfg,embed_metadata=True),'/tools/ffmpeg')
+    assert any(pp['key']=='FFmpegMetadata' for pp in with_metadata['postprocessors'])
     assert opts['retry_sleep_functions']['fragment'](100)==30
     assert opts['outtmpl'].startswith('YouTube/%(uploader_id)s/')
     twitch=ydl_options(replace(cfg,url='https://twitch.tv/example'),'C:/tools/ffmpeg.exe')
