@@ -462,6 +462,7 @@ class WatchManager:
         s.recording = None
         s.last_elapsed = max(0.0, now - job.started)
         result = job.terminal.get("status", "failed")
+        recovery_queued = False
         if result in ("completed", "cancelled", "forced") or s.suppressed_id == s.stream_id:
             s.suppressed_id = s.stream_id
             self.finished_broadcasts.append(broadcast_key(login, s.stream_id))
@@ -470,6 +471,7 @@ class WatchManager:
             if is_youtube(login) and s.recovery_requested and not s.youtube_recovery:
                 s.youtube_recovery = True
                 s.recovery_requested = False
+                recovery_queued = True
                 s.retry_at = now + 1.0
                 s.status = "retry_wait"
                 self._log(
@@ -481,7 +483,7 @@ class WatchManager:
                     self.config.interval, min(60 * 2 ** max(0, s.attempts - 1), 900))
                 s.status = "retry_limit" if s.attempts >= MAX_ATTEMPTS else "retry_wait"
         s.online = False
-        s.next_check = now + self.config.interval
+        s.next_check = now + (1.0 if recovery_queued else self.config.interval)
         self._log(login, f"Recording {result} after {s.last_elapsed:.1f}s; waiting for the next eligible broadcast/check")
 
     def tick(self) -> None:
