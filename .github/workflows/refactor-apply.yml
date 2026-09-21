@@ -21,7 +21,10 @@ jobs:
           from pathlib import Path
           plans = []
           for packet in sorted(Path('.github').glob('refactor-edits-*.json')):
-              plans.extend(json.loads(packet.read_text(encoding='utf-8')))
+              raw = packet.read_text(encoding='utf-8')
+              if packet.name == 'refactor-edits-2c.json':
+                  raw = raw.replace("r'^" + chr(92) + "d+:'", "r'^" + chr(92) * 2 + "d+:'")
+              plans.extend(json.loads(raw))
           assert len(plans) == 24, f'Unexpected file count: {len(plans)}'
           seen, prepared = set(), []
           for item in plans:
