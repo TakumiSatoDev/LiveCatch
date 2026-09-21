@@ -159,12 +159,20 @@ def apply_monitor_preset(base: Settings, preset: str) -> Settings:
     return replace(base, concurrent_fragments=fragments, prefetch=prefetch, gpu_export="off")
 
 
-def channel_settings(base: Settings, login: str, stream_id: str | None = None, *, catchup: bool = False) -> Settings:
+def channel_settings(base: Settings, login: str, stream_id: str | None = None, *,
+                     catchup: bool = False, youtube_recovery: bool = False) -> Settings:
     login = normalize_target(login)
     settings = replace(
         base, url=target_url(login), mode="reservation",
         live_from_start=bool(catchup), gpu_export="off",
     )
+    if youtube_recovery and not is_youtube(login):
+        raise ValueError("YouTube recovery mode is only valid for YouTube channels")
+    if youtube_recovery:
+        settings = replace(
+            settings, live_from_start=False,
+            concurrent_fragments=min(settings.concurrent_fragments, 4),
+            prefetch=min(settings.prefetch, 2))
     if stream_id is not None:
         if not valid_broadcast_id(login, stream_id):
             raise ValueError("Missing/invalid broadcast ID")
@@ -179,8 +187,13 @@ def channel_settings(base: Settings, login: str, stream_id: str | None = None, *
 
 def new_worker(kind: str, stream_id: str | None = None) -> Supervisor:
     worker = Supervisor()
-    flags = {"probe": ["--twitch-probe"], "record": ["--twitch-watch-record", str(stream_id)],
-             "youtube_probe": ["--youtube-probe"], "youtube_record": ["--youtube-watch-record", str(stream_id)]}
+    flags = {
+        "probe": ["--twitch-probe"],
+        "record": ["--twitch-watch-record", str(stream_id)],
+        "youtube_probe": ["--youtube-probe"],
+        "youtube_record": ["--youtube-watch-record", str(stream_id)],
+        "youtube_record_recovery": ["--youtube-watch-record-recovery", str(stream_id)],
+    }
     if kind not in flags:
         raise ValueError("Unknown worker kind")
     worker.command += flags[kind]
@@ -213,6 +226,8 @@ class ChannelState:
     next_check: float = 0.0
     observed: float = -1e20
     retry_at: float = 0.0
+    youtube_recovery: bool = False
+    recovery_requested: bool = False
     probe: Job | None = None
     recording: Job | None = None
     last_elapsed: float = 0.0
@@ -356,6 +371,7 @@ class WatchManager:
         key = broadcast_key(login, s.stream_id)
         self.finished_broadcasts = deque((x for x in self.finished_broadcasts if x != key), maxlen=1000)
         s.suppressed_id, s.attempts, s.retry_at = "", 0, 0.0
+        s.youtube_recovery = s.recovery_requested = False
         s.online, s.next_check, s.status = False, self.clock(), "waiting"
 
     def shutdown(self, *, force: bool = False) -> None:
@@ -409,6 +425,7 @@ class WatchManager:
             stream_id = str(result["stream_id"])
             if stream_id != s.stream_id:
                 s.attempts, s.retry_at = 0, 0.0
+                s.youtube_recovery = s.recovery_requested = False
             s.stream_id, s.online, s.observed = stream_id, True, now
             s.title, s.detail = str(result.get("title", ""))[:300], ""
             s.status = "live"
@@ -427,6 +444,9 @@ class WatchManager:
             apply_event(s.telemetry, event, now=now)
             if kind == "done":
                 job.terminal = event
+            if kind == "youtube_recovery":
+                s.recovery_requested = True
+                s.detail = "YouTube fragment authorization failed; recovery retry queued"
             if s.status != "stopping":
                 s.status = {
                     "starting": "record_starting", "extracting": "record_extracting",
@@ -447,8 +467,19 @@ class WatchManager:
             self.finished_broadcasts.append(broadcast_key(login, s.stream_id))
             s.status = "completed" if result == "completed" else "skipped"
         else:
-            s.retry_at = now + max(self.config.interval, min(60 * 2 ** max(0, s.attempts - 1), 900))
-            s.status = "retry_limit" if s.attempts >= MAX_ATTEMPTS else "retry_wait"
+            if is_youtube(login) and s.recovery_requested and not s.youtube_recovery:
+                s.youtube_recovery = True
+                s.recovery_requested = False
+                s.retry_at = now + 1.0
+                s.status = "retry_wait"
+                self._log(
+                    login,
+                    "Retrying this broadcast in YouTube recovery mode "
+                    "(live edge, <=4 fragments, combined A/V preferred)")
+            else:
+                s.retry_at = now + max(
+                    self.config.interval, min(60 * 2 ** max(0, s.attempts - 1), 900))
+                s.status = "retry_limit" if s.attempts >= MAX_ATTEMPTS else "retry_wait"
         s.online = False
         s.next_check = now + self.config.interval
         self._log(login, f"Recording {result} after {s.last_elapsed:.1f}s; waiting for the next eligible broadcast/check")
@@ -483,17 +514,27 @@ class WatchManager:
                 elif now - s.observed <= self.config.interval:
                     try:
                         s.attempts += 1
-                        worker = self.factory("youtube_record" if is_youtube(c.login) else "record", s.stream_id)
+                        recovery = bool(is_youtube(c.login) and s.youtube_recovery)
+                        worker_kind = (
+                            "youtube_record_recovery" if recovery else
+                            "youtube_record" if is_youtube(c.login) else "record")
+                        worker = self.factory(worker_kind, s.stream_id)
                         worker.start(channel_settings(
                             self.settings, c.login, s.stream_id,
-                            catchup=self.config.catchup_mode == "from_start",
+                            catchup=self.config.catchup_mode == "from_start" and not recovery,
+                            youtube_recovery=recovery,
                         ))
+                        s.recovery_requested = False
                         s.recording = Job(worker, now, self.generation)
                         s.telemetry = new_progress(
                             active=True, catchup=self.config.catchup_mode == "from_start", now=now)
                         s.last_elapsed = 0.0
                         s.status = "record_starting"
-                        self._log(c.login, f"Started broadcast {s.stream_id} (attempt {s.attempts}/{MAX_ATTEMPTS})")
+                        mode = " recovery" if recovery else ""
+                        self._log(
+                            c.login,
+                            f"Started broadcast {s.stream_id} "
+                            f"(attempt {s.attempts}/{MAX_ATTEMPTS}{mode})")
                     except Exception as exc:
                         s.retry_at = now + max(60, self.config.interval)
                         s.status, s.detail = "retry_wait", redact(str(exc))[:400]
