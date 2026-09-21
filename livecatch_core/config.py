@@ -40,7 +40,7 @@ def normalize_url(value: str) -> str:
 
 @dataclass(frozen=True)
 class Settings:
-    schema_version: int = 3
+    schema_version: int = 4
     language: str = "ja"
     mode: str = "reservation"
     url: str = ""
@@ -52,7 +52,7 @@ class Settings:
     browser: str = "chrome"
     live_from_start: bool = True
     write_info_json: bool = True
-    embed_metadata: bool = True
+    embed_metadata: bool = False
     lightweight_catchup_postprocess: bool = False
     quality_preset: str = "recommended_1080p"
     output_format: str = "mp4"
@@ -78,7 +78,7 @@ class Settings:
             if type(value) is not type(default):
                 raise ValueError(f"Invalid type for {f.name}")
             clean[f.name] = value
-        clean["schema_version"] = 3
+        clean["schema_version"] = 4
         # Automatic recording/export in the desktop app is now always stream-copy only.
         # Keep legacy fields readable for backwards compatibility and the standalone export CLI.
         clean["gpu_export"] = "off"
@@ -139,6 +139,11 @@ class ConfigStore:
                 if type(workers) is not int:
                     raise ValueError("Invalid legacy concurrent_fragments")
                 data["concurrent_fragments"] = min(workers, 32)
+            if schema < 4:
+                # v3 embedded metadata by default, which makes FFmpeg rewrite the
+                # complete media file after download. v4 makes that expensive,
+                # quality-neutral pass opt-in.
+                data["embed_metadata"] = False
         return Settings.from_dict(data)
 
     def save(self, settings: Settings) -> None:
