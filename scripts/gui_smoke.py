@@ -31,7 +31,11 @@ with tempfile.TemporaryDirectory() as directory:
         app.vars['language'].set('en');app._rebuild();app.update()
         app.notebook.select(app.settings_tab);app.update()
         assert app.settings().language=='en'
-        assert app.winfo_width()>=840 and app.start_button.winfo_ismapped()
+        assert app.winfo_width()>=840 and not app.start_button.winfo_ismapped()
+        app.notebook.select(app.record_tab);app.update()
+        assert app.start_button.winfo_ismapped()
+        assert app.progressbar.winfo_ismapped()
+        assert app.metrics_var.get()
         print('Tk GUI smoke passed')
     finally:app.destroy()
 

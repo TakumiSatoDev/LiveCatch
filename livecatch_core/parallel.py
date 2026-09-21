@@ -17,7 +17,7 @@ R = TypeVar("R")
 
 class OrderedPrefetch:
     def __init__(self, workers: int, window: int, cancel: Event | None = None):
-        if workers < 1 or window < workers:
+        if type(workers) is not int or type(window) is not int or workers < 1 or window < workers:
             raise ValueError("Require 1 <= workers <= window")
         self.workers, self.window = workers, window
         self.cancel = cancel if cancel is not None else Event()

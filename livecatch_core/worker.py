@@ -15,8 +15,8 @@ from threading import Event, Thread
 from .channels import YOUTUBE_ID
 from .config import Settings, normalize_url
 from .events import Emitter
-from .media import ExportOptions, export_batch
 from .options import ydl_options
+from .progress import stream_key, number
 from .tools import find_tool
 from .ytdlp_patch import fragment_patch, ffmpeg_stop_bridge
 
@@ -39,7 +39,6 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
         raise RuntimeError("ffmpeg AND ffprobe are required in tools/ or PATH")
     for directory in (settings.save_dir, settings.temp_dir if settings.use_temp_dir else settings.save_dir):
         Path(directory).expanduser().mkdir(parents=True, exist_ok=True)
-    outputs = []
 
     class Logger:
         def debug(self, message):
@@ -81,6 +80,14 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
                     "http_dash_segments_generator" not in f.get("protocol", "") for f in formats
                 ):
                     raise PostProcessingError("Snapshot requires YouTube DVR. Twitch live/unknown protocols: use normal recording or a VOD URL.")
+            formats = info.get("requested_formats") or [info]
+            live = info.get("is_live") is True
+            supported = bool(live and settings.engine == "bounded" and all(
+                "http_dash_segments_generator" in f.get("protocol", "") for f in formats))
+            emit("download_context", live=live, streams=len(formats),
+                 catchup=bool(supported and options.get("live_from_start")
+                              and settings.mode != "catchup_stop"),
+                 catchup_supported=supported)
             emit("phase", name="downloading")
             return [], info
 
@@ -88,7 +95,6 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
         def run(self, info):
             filename = info.get("filepath")
             if filename and Path(filename).is_file():
-                outputs.append(Path(filename))
                 emit("output", path=filename)
             return [], info
 
@@ -122,15 +128,17 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
         elif isinstance(p.get("downloaded_bytes"), int) and isinstance(p.get("total_bytes"), int) \
                 and p["total_bytes"] > 0:
             percent = min(100.0, max(0.0, p["downloaded_bytes"] * 100 / p["total_bytes"]))
-        emit("progress", stream=info_dict.get("format_id", "media"),
+        emit("progress", stream=stream_key(info_dict.get("format_id")),
              status=p.get("status"), downloaded_bytes=p.get("downloaded_bytes"),
              total_bytes=p.get("total_bytes") or p.get("total_bytes_estimate"),
-             speed=p.get("speed"), fragment_index=fragment_index,
+             speed=number(p.get("speed")), fragment_index=fragment_index,
              fragment_count=fragment_count, percent=percent)
 
     def postprocess(p):
         if p.get("postprocessor") not in ("ValidateDownload", "CaptureOutput"):
             emit("phase", name="postprocessing")
+            emit("phase_progress", phase="postprocessing",
+                 detail=str(p.get("postprocessor") or ""), percent=None)
 
     options["progress_hooks"] = [progress]
     options["postprocessor_hooks"] = [postprocess]
@@ -140,7 +148,7 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
     adapter = fragment_patch(
         cancel, prefetch=settings.prefetch,
         snapshot=settings.mode == "catchup_stop",
-        catchup=settings.live_from_start and settings.mode != "catchup_stop",
+        catchup=bool(options.get("live_from_start")) and settings.mode != "catchup_stop",
         emit=emit)
     emit("phase", name="extracting")
     with ffmpeg_stop_bridge(cancel), (adapter if settings.engine == "bounded" else nullcontext()):
@@ -152,12 +160,6 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
         return code
     if cancel.is_set():
         return 130
-    if settings.gpu_export != "off":
-        emit("phase", name="exporting")
-        export_batch(outputs, ExportOptions(settings.gpu_export, settings.export_height,
-                                            settings.gpu_device, settings.gpu_jobs,
-                                            settings.gpu_preset),
-                     ffmpeg, ffprobe, cancel, emit)
     return 0
 
 

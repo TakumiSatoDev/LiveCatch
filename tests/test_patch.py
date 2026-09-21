@@ -34,13 +34,13 @@ def test_patch_calls_real_contract_path_and_restores():
     with _patch_class(FragmentContract,Event(),prefetch=2,snapshot=False,emit=lambda kind,**data:events.append((kind,data))):
         assert fd.download_and_append_fragments({'filename':'a'},[{'frag_index':i} for i in range(10)],{},tpe=object())
     assert fd.outputs['a']==[str(i).encode() for i in range(10)]
-    assert [data['current'] for kind,data in events if kind=='fragment']==list(range(10))
+    assert [data['fragment_index'] for kind,data in events if kind=='fragment_state' and not data['finished']]==list(range(10))
     assert FragmentContract.download_and_append_fragments is original and FragmentContract._append_fragment is append
 
 def test_catchup_progress_normalizes_truncated_live_sequence():
     fd=FragmentContract();events=[]
     fragments=[
-        {'frag_index':i+1,'fragment_count':105,'url':f'https://media.invalid/x?sq={100+i}'}
+        {'frag_index':i+1,'fragment_count':106,'url':f'https://media.invalid/x?sq={100+i}'}
         for i in range(6)
     ]
     info={'is_live':True,'is_from_start':True}

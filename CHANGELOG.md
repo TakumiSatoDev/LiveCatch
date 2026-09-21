@@ -1,5 +1,26 @@
 # Changelog
 
+## v3.5.0
+
+### Fixed
+
+- Unify network and writer stream IDs to prevent stale duplicate fragment rows.
+- Report downloaded and ordered-appended fragments separately, with cumulative byte counts. First reception and append notifications are immediate.
+- Coalesce telemetry rather than queue it behind logs; flush final pending samples before phase changes and completion. Repeated LIVE samples no longer bypass throttling.
+- Fix exclusive YouTube live-edge counting and use the latest observed head at commit; do not declare a stale head or incomplete audio track caught up.
+- Do not reuse download percentages/speed for muxing or revive a completed progress state with late telemetry.
+- Enforce quality height caps instead of silently falling back to an uncapped format.
+- Save common recording settings explicitly without starting a recording; watch settings save also preserves common values.
+
+- Resize the notebook to the selected tab so short manual forms do not reserve the monitor/settings tab height and hide the progress meter.
+
+### Refactored
+
+- Share the progress reducer and renderer between manual and automatic recording. Isolate thread-safe fragment accounting from the yt-dlp adapter.
+- Preserve bounded prefetch, ordered incremental writes, upstream resume/crypto and explicit cancellation. No additional forced disk flushes or re-encoding.
+- Rewrite README around installation, recording, monitoring, quality choices and troubleshooting. Move internals to docs/DEVELOPMENT.md.
+- Add slow-first-fragment real-HTTP regression and telemetry queue-latency benchmark.
+
 ## v3.4.1
 
 ### Added

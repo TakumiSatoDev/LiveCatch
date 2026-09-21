@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from .config import Settings
+from .progress import progress_text
 from .gui import LiveCatchApp
 from .tools import find_tool
 from .twitch_watch import (
@@ -100,6 +101,7 @@ class TwitchWatchApp(LiveCatchApp):
         scroll.pack(side="right", fill="y")
         self.watch_tree.configure(yscrollcommand=scroll.set)
         self.watch_tree.pack(side="left", fill="both", expand=True)
+        self.watch_tree.bind("<<TreeviewSelect>>", lambda _event: self._render_watch())
         row = ttk.Frame(frame)
         row.pack(fill="x", pady=5)
         for title, command in ((("有効 / 無効", "Enable / disable"), self._watch_toggle),
@@ -153,64 +155,14 @@ class TwitchWatchApp(LiveCatchApp):
     def _watch_tab_changed(self, _event=None):
         if not hasattr(self, "watch_tab"):
             return
-        self._set_manual_controls_visible(self.notebook.select() != str(self.watch_tab))
+        self._sync_tab_layout()
 
-    def _watch_progress_text(self, state) -> str:
+    def _watch_progress_text(self, state):
         if state is None:
             return ""
         if state.recording is None:
             return "100%" if state.status == "completed" else ""
-
-        progress = list(state.progress.values())
-        speeds = [float(p["speed"]) for p in progress
-                  if isinstance(p.get("speed"), (int, float)) and p["speed"] > 0]
-
-        if state.catchup_active and state.phase == "downloading":
-            catchup_states = list(state.catchup.values())
-            percentages = [float(p["percent"]) for p in catchup_states
-                           if isinstance(p.get("percent"), (int, float))]
-            gaps = [int(p["gap_fragments"]) for p in catchup_states
-                    if isinstance(p.get("gap_fragments"), int)]
-            parts = []
-            if state.caught_up:
-                parts.append("LIVE")
-            elif percentages:
-                parts.append(self._t(
-                    f"追いつき {min(percentages):.0f}%",
-                    f"Catch-up {min(percentages):.0f}%"))
-                if gaps:
-                    parts.append(self._t(
-                        f"残り約{max(gaps)} frag",
-                        f"~{max(gaps)} frag left"))
-            else:
-                parts.append(self._t("追いつき計算中…", "Calculating catch-up…"))
-            if speeds:
-                parts.append(f"{self._format_bytes(sum(speeds))}/s")
-            return " · ".join(parts)
-
-        percentages = [float(p["percent"]) for p in progress
-                       if isinstance(p.get("percent"), (int, float))]
-        fragments = [(p.get("fragment_index"), p.get("fragment_count")) for p in progress]
-        parts = []
-        if percentages:
-            parts.append(f"{min(percentages):.0f}%")
-        known = [(cur, total) for cur, total in fragments
-                 if isinstance(cur, int) and isinstance(total, int) and total > 0]
-        if known:
-            cur, total = min(known, key=lambda pair: pair[0] / pair[1])
-            parts.append(f"{cur}/{total} frag")
-        elif fragments:
-            current = [cur for cur, _total in fragments if isinstance(cur, int)]
-            if current:
-                parts.append(f"frag {max(current)}")
-        if speeds:
-            parts.append(f"{self._format_bytes(sum(speeds))}/s")
-        if parts:
-            return " · ".join(parts)
-        return self._t(
-            "処理中…" if state.phase in {"starting", "extracting", "postprocessing"} else "録画中…",
-            "Working…" if state.phase in {"starting", "extracting", "postprocessing"} else "Recording…",
-        )
+        return progress_text(state.telemetry, self.vars["language"].get())
 
     def _watch_values(self, channels=None):
         return WatchConfig(
@@ -272,7 +224,9 @@ class TwitchWatchApp(LiveCatchApp):
 
     def _watch_save(self):
         try:
+            settings = self.settings()
             self._commit_watch_config(self._watch_values())
+            self.store.save(settings)
         except (ValueError, OSError) as exc:
             messagebox.showerror("LiveCatch", str(exc))
 

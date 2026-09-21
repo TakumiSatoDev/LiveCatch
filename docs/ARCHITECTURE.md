@@ -1,5 +1,7 @@
 # Architecture / handoff
 
+> 進捗系の現行構成・テストは [DEVELOPMENT.md](DEVELOPMENT.md) を参照してください。
+
 `livecatch.py` → `gui.LiveCatchApp` → `Supervisor` → isolated `livecatch_worker.py` → `worker.record`.
 
 GUI/Tk stays on the main thread. Settings are frozen dataclasses, validated before sending one JSON document through worker stdin.
