@@ -12,13 +12,14 @@ from pathlib import Path
 import sys
 from threading import Event, Thread
 
-from .channels import YOUTUBE_ID
+from .channels import YOUTUBE_ID, validate_recording_url
 from .config import Settings, normalize_url
 from .events import Emitter
 from .options import ydl_options
 from .progress import stream_key, number
 from .tools import find_tool
 from .ytdlp_patch import fragment_patch, ffmpeg_stop_bridge
+from .ui_text import configure_windows_utf8
 
 
 def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | None = None,
@@ -28,6 +29,7 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
     from yt_dlp.utils import PostProcessingError
 
     settings.validate()
+    validate_recording_url(settings.url)
     if twitch_stream_id is not None and not re.fullmatch(r"[0-9]{1,32}", twitch_stream_id):
         raise ValueError("Invalid expected Twitch broadcast ID")
     if youtube_video_id is not None and not YOUTUBE_ID.fullmatch(youtube_video_id):
@@ -164,6 +166,9 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
 
 
 def main() -> int:
+    # The worker can be launched as a frozen exe or directly from Python.
+    # Force its own stdio to UTF-8; do not rely on the GUI process/console codepage.
+    configure_windows_utf8()
     if sys.argv[1:] == ["--twitch-probe"]:
         from .twitch_watch_probe import main as probe_main
         return probe_main()
