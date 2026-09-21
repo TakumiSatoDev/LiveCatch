@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.5.1
+
+### Fixed
+
+- Metadata embedding is now opt-in instead of the default, avoiding a quality-neutral full-file FFmpeg rewrite after recording.
+- Existing v3 settings migrate metadata embedding to off once; users can explicitly turn it back on from Settings.
+- The metadata option now warns that enabling it rewrites the complete media file after download.
+
 ## v3.5.0
 
 ### Fixed
