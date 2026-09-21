@@ -109,6 +109,12 @@ def test_youtube_settings_and_worker_routing():
     assert channel_settings(Settings(),'youtube:@example').url.endswith('/@example/live')
     assert new_worker('youtube_probe').command[-1]=='--youtube-probe'
     assert new_worker('youtube_record',VIDEO).command[-2:]==['--youtube-watch-record',VIDEO]
+    assert new_worker('youtube_record_recovery',VIDEO).command[-2:]==['--youtube-watch-record-recovery',VIDEO]
+    recovery=channel_settings(
+        Settings(concurrent_fragments=64,prefetch=4),'youtube:@example',VIDEO,
+        catchup=True,youtube_recovery=True)
+    assert recovery.live_from_start is False
+    assert recovery.concurrent_fragments==4 and recovery.prefetch==2
     assert valid_broadcast_id('youtube:@example', VIDEO)
     assert not valid_broadcast_id('youtube:@example','1234')
     with pytest.raises(ValueError): channel_settings(Settings(),'youtube:@example','../x')
@@ -143,6 +149,27 @@ def test_mixed_global_cap_and_fresh_video_identity():
     m.states['example'].recording.worker.finish();m.tick()
     assert m.recording_channels=={'youtube:@example'}
     assert m.states['youtube:@example'].recording.worker.settings.url.endswith(VIDEO)
+
+
+def test_youtube_fragment_auth_failure_switches_next_attempt_to_recovery():
+    m,now,workers=manager(['youtube:@example'])
+    workers[0][2].finish(result={'status':'live','stream_id':VIDEO});m.tick()
+    state=m.states['youtube:@example']
+    assert state.recording is not None
+    normal=state.recording.worker
+    normal.events.put({'event':'youtube_recovery','reason':'fragment_auth','count':3})
+    normal.finish('failed');m.tick()
+    assert state.youtube_recovery and state.status=='retry_wait'
+    assert state.next_check==now[0]+1.0
+
+    now[0]+=1.0;m.tick()
+    assert state.probe is not None
+    state.probe.worker.finish(result={'status':'live','stream_id':VIDEO});m.tick()
+    assert state.recording is not None
+    assert state.recording.worker.settings.live_from_start is False
+    assert state.recording.worker.settings.concurrent_fragments==4
+    assert state.recording.worker.settings.prefetch==2
+    assert any(kind=='youtube_record_recovery' for kind,_,_ in workers)
 
 
 def test_alias_dedup_stop_and_retry():
