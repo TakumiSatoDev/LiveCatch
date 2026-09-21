@@ -60,3 +60,66 @@ def test_real_two_stream_live_snapshot(tmp_path):
             args.append((ctx,generate(head),fmt))
         assert fd.download_and_append_fragments_multiple(*args)
     assert (tmp_path/'video.bin').read_bytes()==(tmp_path/'audio.bin').read_bytes()==b''.join(PARTS[:10])
+
+
+def test_received_fragments_visible_while_first_ordered_write_is_waiting(tmp_path):
+    """The user's '0 fragments' case: #2 finishes before a slow #1."""
+    release_first = Event()
+    later_ready = Event()
+    events = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_GET(self):
+            index = int(self.path.strip('/'))
+            if index == 0:
+                release_first.wait(4)
+            data = PARTS[index]
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    http = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    server_thread = Thread(target=http.serve_forever, daemon=True)
+    server_thread.start()
+    params = dict(quiet=True, noprogress=True, concurrent_fragment_downloads=4,
+                  retries=0, fragment_retries=0, skip_unavailable_fragments=False)
+    info = dict(id='slow-first', title='owned', ext='bin', format_id='v', protocol='http_dash_segments')
+    filename = tmp_path / 'slow.bin'
+    errors = []
+
+    def emit(kind, **data):
+        events.append((kind, data))
+        if kind == 'fragment_state' and data['downloaded_fragments'] > 0 and data['committed_fragments'] == 0:
+            later_ready.set()
+
+    def record():
+        try:
+            with yt_dlp.YoutubeDL(params) as ydl, fragment_patch(Event(), emit=emit):
+                fd = DashSegmentsFD(ydl, params)
+                ctx = {'filename': str(filename), 'total_frags': 4}
+                fd._prepare_and_start_frag_download(ctx, info)
+                fragments = [dict(frag_index=i+1, index=i, fragment_count=4,
+                                  url=f'http://127.0.0.1:{http.server_port}/{i}') for i in range(4)]
+                assert fd.download_and_append_fragments(ctx, fragments, info)
+        except BaseException as exc:
+            errors.append(exc)
+
+    task = Thread(target=record, daemon=True)
+    try:
+        task.start()
+        assert later_ready.wait(3), 'Reception remained invisible until the first append'
+        release_first.set()
+        task.join(5)
+        assert not task.is_alive() and not errors
+        assert filename.read_bytes() == b''.join(PARTS[:4])
+        final = [d for k, d in events if k == 'fragment_state'][-1]
+        assert final['downloaded_fragments'] == final['committed_fragments'] == 4
+        assert final['committed_bytes'] == 4 * 1024
+    finally:
+        release_first.set()
+        task.join(5)
+        http.shutdown()
+        http.server_close()
+        server_thread.join()

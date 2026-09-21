@@ -21,6 +21,7 @@ from uuid import uuid4
 
 from .channels import broadcast_key, is_youtube, normalize_target, target_url, valid_broadcast_id
 from .config import Settings
+from .progress import new_progress, apply_event
 from .events import EventBuffer, redact
 from .supervisor import Supervisor
 
@@ -215,12 +216,20 @@ class ChannelState:
     probe: Job | None = None
     recording: Job | None = None
     last_elapsed: float = 0.0
-    phase: str = ""
-    progress: dict[str, dict] = field(default_factory=dict)
-    catchup: dict[str, dict] = field(default_factory=dict)
-    catchup_active: bool = False
-    caught_up: bool = False
-    stream_count: int = 0
+    telemetry: dict = field(default_factory=new_progress)
+
+    @property
+    def phase(self): return self.telemetry['phase']
+    @property
+    def progress(self): return self.telemetry['streams']
+    @property
+    def catchup(self): return self.telemetry['catchup']
+    @property
+    def catchup_active(self): return self.telemetry['catchup_active']
+    @property
+    def caught_up(self): return self.telemetry['caught_up']
+    @property
+    def stream_count(self): return self.telemetry['stream_count']
 
 
 class WatchManager:
@@ -415,60 +424,16 @@ class WatchManager:
             return
         for event in job.worker.events.drain():
             kind = event.get("event")
+            apply_event(s.telemetry, event, now=now)
             if kind == "done":
                 job.terminal = event
-            elif kind == "phase" and s.status != "stopping":
-                phase = str(event.get("name") or "")
-                s.phase = phase
-                if phase == "downloading" and s.catchup_active and not s.caught_up:
-                    s.status = "catching_up"
-                else:
-                    s.status = {
-                        "starting": "record_starting",
-                        "extracting": "record_extracting",
-                        "downloading": "recording",
-                        "postprocessing": "postprocessing",
-                        "exporting": "postprocessing",
-                    }.get(phase, "recording")
-            elif kind == "streams":
-                count = event.get("count")
-                if isinstance(count, int) and count > 0:
-                    s.stream_count = count
-            elif kind == "catchup":
-                stream = str(event.get("stream") or "media")
-                progress = s.catchup.setdefault(stream, {})
-                progress.update(event)
-                expected = s.stream_count
-                states = list(s.catchup.values())
-                s.caught_up = bool(
-                    states
-                    and (not expected or len(states) >= expected)
-                    and all(item.get("caught_up") is True for item in states)
-                )
-                if s.caught_up and s.status != "stopping":
-                    s.status = "recording"
-            elif kind in ("progress", "fragment"):
-                stream = str(event.get("stream") or "media")
-                progress = s.progress.setdefault(stream, {})
-                if kind == "progress":
-                    for key in ("percent", "downloaded_bytes", "total_bytes", "speed",
-                                "fragment_index", "fragment_count"):
-                        value = event.get(key)
-                        if value is not None:
-                            progress[key] = value
-                else:
-                    current = event.get("current")
-                    total = event.get("total")
-                    if isinstance(current, int):
-                        progress["fragment_index"] = current
-                    if isinstance(total, int) and total > 0:
-                        progress["fragment_count"] = total
-                        if isinstance(current, int):
-                            progress["percent"] = min(100.0, max(0.0, current * 100 / total))
-                    size = event.get("bytes")
-                    if isinstance(size, int) and size >= 0:
-                        progress["committed_bytes"] = int(progress.get("committed_bytes", 0)) + size
-            elif kind in ("error", "warning", "output", "exported"):
+            if s.status != "stopping":
+                s.status = {
+                    "starting": "record_starting", "extracting": "record_extracting",
+                    "downloading": "catching_up" if s.catchup_active and not s.caught_up else "recording",
+                    "postprocessing": "postprocessing",
+                }.get(s.phase, s.status)
+            if kind in ("error", "warning", "output", "exported"):
                 message = str(event.get("message") or event.get("path", kind))
                 s.detail = redact(message)[:400]
                 self._log(login, message)
@@ -524,12 +489,8 @@ class WatchManager:
                             catchup=self.config.catchup_mode == "from_start",
                         ))
                         s.recording = Job(worker, now, self.generation)
-                        s.phase = "starting"
-                        s.progress.clear()
-                        s.catchup.clear()
-                        s.stream_count = 0
-                        s.catchup_active = self.config.catchup_mode == "from_start"
-                        s.caught_up = not s.catchup_active
+                        s.telemetry = new_progress(
+                            active=True, catchup=self.config.catchup_mode == "from_start", now=now)
                         s.last_elapsed = 0.0
                         s.status = "record_starting"
                         self._log(c.login, f"Started broadcast {s.stream_id} (attempt {s.attempts}/{MAX_ATTEMPTS})")

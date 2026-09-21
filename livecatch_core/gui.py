@@ -14,6 +14,8 @@ from threading import Thread
 from time import monotonic
 
 from . import __version__
+from .progress import (new_progress, apply_event, current_percent, catchup_percent,
+                       progress_text, transfer_text, format_bytes, TELEMETRY)
 from .config import BROWSERS, QUALITY, ConfigStore, Settings
 from .options import ydl_options
 from .supervisor import Supervisor
@@ -83,11 +85,7 @@ class LiveCatchApp(tk.Tk):
         self.vars = {f.name: (tk.BooleanVar(value=getattr(settings, f.name)) if type(getattr(settings, f.name)) is bool
                              else tk.StringVar(value=str(getattr(settings, f.name)))) for f in fields(Settings)}
         self.closing = False
-        self._progress = {
-            "phase": "starting", "active": False, "streams": {}, "detail": "",
-            "outputs": 0, "started_at": None, "elapsed": None,
-            "catchup": {}, "caught_up": False, "stream_count": 0,
-        }
+        self._progress = new_progress()
         self._update_checker = update_checker
         self._update_info: UpdateCheck | None = None
         self._update_checking = False
@@ -161,6 +159,8 @@ class LiveCatchApp(tk.Tk):
             frame = ttk.LabelFrame(self.settings_tab, text=self._t(*title), padding=8)
             frame.grid(row=0, column=index, sticky="nsew", padx=4, pady=4)
             add_fields(frame, names)
+        ttk.Button(self.settings_tab, text=self._t("保存・画質・取得設定を保存", "Save recording settings"),
+                   command=self._save_recording_settings).grid(row=2, column=0, columnspan=2, sticky="w", pady=6)
         self.manual_help = ttk.Label(self.body, wraplength=960, text=self._t(
             "reservation＝予約 / live_full＝終了まで / catchup_stop＝最初に観測した共通地点まで（YouTube DVR）。\n"
             "録画は配信の映像・音声を再エンコードせず保存します。",
@@ -213,6 +213,15 @@ class LiveCatchApp(tk.Tk):
         self.log = tk.Text(self.body, height=16, wrap="word", state="disabled")
         self.log.pack(fill="both", expand=True, pady=(12, 0))
         self.start_button.configure(state="disabled" if self.supervisor.active else "normal")
+        self.notebook.bind("<<NotebookTabChanged>>", self._sync_tab_layout, add="+")
+        self.after_idle(self._sync_tab_layout)
+
+    def _sync_tab_layout(self, _event=None):
+        if not self.winfo_exists() or not self.notebook.select():
+            return
+        selected = self.nametowidget(self.notebook.select())
+        self.notebook.configure(height=selected.winfo_reqheight())
+        self._set_manual_controls_visible(selected is self.record_tab)
 
     def _set_manual_controls_visible(self, visible: bool):
         if not all(hasattr(self, name) for name in ("manual_help", "manual_bar", "manual_status", "log")):
@@ -234,6 +243,7 @@ class LiveCatchApp(tk.Tk):
     def _rebuild(self, _event=None):
         text = self.log.get("1.0", "end-1c")
         self.body.destroy()
+        self._meter_running = False
         self._build()
         self._log(text)
 
@@ -249,6 +259,14 @@ class LiveCatchApp(tk.Tk):
             value = var.get()
             data[name] = int(value) if type(getattr(defaults, name)) is int else value
         return Settings.from_dict(data)
+
+    def _save_recording_settings(self):
+        try:
+            self.store.save(self.settings())
+            self._log(self._t("録画設定を保存しました。進行中の録画設定は変更しません。",
+                             "Recording settings saved. Active recordings are unchanged."))
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("LiveCatch", str(exc))
 
     def _start(self):
         try:
@@ -448,260 +466,108 @@ class LiveCatchApp(tk.Tk):
         self.destroy()
 
     def _reset_progress(self):
-        self._progress = {
-            "phase": "starting", "active": False, "streams": {}, "detail": "",
-            "last_phase": "starting", "outputs": 0,
-            "started_at": None, "elapsed": None,
-            "catchup": {}, "caught_up": False, "stream_count": 0,
-        }
+        self._progress = new_progress()
         self._render_progress()
 
-    def _phase_text(self, phase: str) -> str:
-        ja, en = PHASE_LABELS.get(phase, (phase, phase))
-        return self._t(ja, en)
+    def _phase_text(self, phase):
+        return self._t(*PHASE_LABELS.get(phase, (phase, phase)))
 
-    def _handle_progress_event(self, event: dict):
-        kind = event.get("event")
-        if kind == "phase":
-            phase = event.get("name", "starting")
-            if phase == "exporting":
-                phase = "postprocessing"
-            self._progress["phase"] = phase
-            self._progress["last_phase"] = phase
-        elif kind == "progress":
-            stream = event.get("stream", "media")
-            state = self._progress["streams"].setdefault(stream, {})
-            state.update(event)
-            self._progress["detail"] = stream
-        elif kind == "fragment":
-            stream = event.get("stream", "media")
-            state = self._progress["streams"].setdefault(stream, {})
-            state.update(event)
-            self._progress["detail"] = stream
-        elif kind == "catchup":
-            stream = event.get("stream", "media")
-            state = self._progress["catchup"].setdefault(stream, {})
-            state.update(event)
-            expected = int(self._progress.get("stream_count") or 0)
-            catchup_states = list(self._progress["catchup"].values())
-            self._progress["caught_up"] = bool(
-                catchup_states
-                and (not expected or len(catchup_states) >= expected)
-                and all(item.get("caught_up") is True for item in catchup_states)
-            )
-            if self._progress["caught_up"]:
-                self._progress["detail"] = self._t(
-                    "ライブ位置まで追いつきました。通常録画を継続中",
-                    "Caught up to the live edge; continuing normal recording")
-            else:
-                percentages = [float(item["percent"]) for item in catchup_states
-                               if isinstance(item.get("percent"), (int, float))]
-                gaps = [int(item["gap_fragments"]) for item in catchup_states
-                        if isinstance(item.get("gap_fragments"), int)]
-                percent = min(percentages) if percentages else None
-                gap = max(gaps) if gaps else None
-                if percent is not None:
-                    suffix = f" / 残り約{gap} fragments" if gap is not None else ""
-                    suffix_en = f" / about {gap} fragments left" if gap is not None else ""
-                    self._progress["detail"] = self._t(
-                        f"ライブへ追いつき中 {percent:.1f}%{suffix}",
-                        f"Catching up to live {percent:.1f}%{suffix_en}")
-        elif kind == "streams":
-            count = event.get("count")
-            if isinstance(count, int) and count > 0:
-                self._progress["stream_count"] = count
-            self._progress["detail"] = self._t(
-                f"音声・映像 {event.get('count', '?')}ストリームを処理中",
-                f"Processing {event.get('count', '?')} audio/video streams")
-        elif kind == "snapshot":
-            self._progress["detail"] = self._t(
-                f"現在まで取得: sequence {event.get('exclusive_sequence', '?')} まで",
-                f"Snapshot cutoff: sequence {event.get('exclusive_sequence', '?')}")
-        elif kind == "output":
-            self._progress["outputs"] += 1
-            self._progress["detail"] = self._t(
-                f"保存済み {self._progress['outputs']}件: {event.get('path', '')}",
-                f"Saved {self._progress['outputs']}: {event.get('path', '')}")
-        elif kind == "done":
-            started_at = self._progress.get("started_at")
-            if isinstance(started_at, (int, float)):
-                self._progress["elapsed"] = max(0.0, monotonic() - started_at)
-            self._progress["active"] = False
-            self._progress["phase"] = "done" if event.get("status") == "completed" else event.get("status", "failed")
-            self._progress["detail"] = self._t(
-                f"終了: {event.get('status', 'failed')}",
-                f"Finished: {event.get('status', 'failed')}")
-            if event.get("status") == "completed":
-                self._progress["percent"] = 100.0
-        self._render_progress()
+    def _handle_progress_event(self, event, *, render=True):
+        changed = apply_event(self._progress, event)
+        if changed and render:
+            self._render_progress()
+        return changed
 
     def _catchup_percent(self):
-        states = list(self._progress.get("catchup", {}).values())
-        values = [float(state["percent"]) for state in states
-                  if isinstance(state.get("percent"), (int, float))]
-        return min(values) if values else None
+        return catchup_percent(self._progress)
 
     def _download_percent(self):
-        if self._progress.get("catchup") and not self._progress.get("caught_up"):
-            return self._catchup_percent()
-        values = [float(state["percent"]) for state in self._progress.get("streams", {}).values()
-                  if isinstance(state.get("percent"), (int, float))]
-        return min(values) if values else None
+        return current_percent(self._progress)
 
-    def _phase_progress_text(self, step_phase: str, state: str) -> str:
+    def _phase_progress_text(self, step_phase, state):
         if state == "done":
             return "100%"
         if state != "active":
             return ""
-        if step_phase == "downloading":
-            percent = self._download_percent()
-            if percent is not None:
-                return f"{percent:.0f}%"
-            if self._progress.get("caught_up"):
-                return "LIVE"
-        return "…"
+        if step_phase == "downloading" and self._progress.get("caught_up"):
+            return "LIVE"
+        value = current_percent(self._progress)
+        return f"{value:.0f}%" if value is not None else "…"
 
     def _render_progress(self):
         if not hasattr(self, "phase_var"):
             return
-        phase = self._progress.get("phase", "starting")
-        phase_label = self._phase_text(phase)
+        p = self._progress
+        phase = p["phase"]
+        label = self._phase_text(phase)
+        language = self.vars["language"].get()
+        text = progress_text(p, language)
         if phase == "downloading":
-            catchup_percent = self._catchup_percent()
-            if self._progress.get("catchup") and not self._progress.get("caught_up") and catchup_percent is not None:
-                phase_label += self._t(
-                    f" — ライブへ追いつき {catchup_percent:.0f}%",
-                    f" — catch-up {catchup_percent:.0f}%")
-            elif self._progress.get("caught_up"):
-                phase_label += self._t(" — LIVE", " — LIVE")
-        self.phase_var.set(phase_label)
-        current_phase = phase if phase in PROGRESS_PHASES else self._progress.get("last_phase", "starting")
-        current_index = PROGRESS_PHASES.index(current_phase)
-        error_state = phase in {"failed", "cancelled", "forced"}
+            label += " — " + text.split(" · ", 1)[0]
+        self.phase_var.set(label)
+        current = phase if phase in PROGRESS_PHASES else p.get("last_phase", "starting")
+        current_index = PROGRESS_PHASES.index(current) if current in PROGRESS_PHASES else 0
+        error = phase in {"failed", "cancelled", "forced"}
         for index, step_phase in enumerate(PROGRESS_PHASES):
-            if error_state and step_phase == current_phase:
-                state = "error"
-            elif phase == "done" or index < current_index:
-                state = "done"
-            elif index == current_index:
-                state = "active"
-            else:
-                state = "idle"
+            state = ("error" if error and index == current_index else
+                     "done" if phase == "done" or index < current_index else
+                     "active" if p.get("active") and index == current_index else "idle")
             background, foreground = PROGRESS_COLORS[state]
-            step = self.phase_steps[step_phase]
             prefix = "✓ " if state == "done" else "▶ " if state == "active" else ""
-            progress_text = self._phase_progress_text(step_phase, state)
-            label = prefix + self._phase_text(step_phase)
-            if progress_text:
-                label += f"\n{progress_text}"
-            step.configure(text=label, bg=background, fg=foreground)
-        detail = self._progress.get("detail", "")
-        if not detail:
-            known = []
-            for state in self._progress.get("streams", {}).values():
-                percent = state.get("percent")
-                if isinstance(percent, (int, float)):
-                    known.append(float(percent))
-            if known:
-                detail = self._t(f"全体の目安 {min(known):.1f}%", f"Overall estimate {min(known):.1f}%")
-            elif self._progress.get("active"):
-                detail = self._t("処理中…", "Working…")
-        self.detail_var.set(detail)
-        percent_values = []
-        catchup_percent = self._catchup_percent()
-        if self._progress.get("catchup") and not self._progress.get("caught_up") and catchup_percent is not None:
-            percent_values = [catchup_percent]
-        else:
-            for state in self._progress.get("streams", {}).values():
-                percent = state.get("percent")
-                if isinstance(percent, (int, float)):
-                    percent_values.append(float(percent))
-        if self._progress.get("caught_up") and self._progress.get("active") and phase == "downloading":
-            percent_values = []
-        if isinstance(self._progress.get("percent"), (int, float)):
-            percent_values = [self._progress["percent"]]
-        if percent_values:
-            self.percent_var.set(f"{min(percent_values):.0f}%")
+            suffix = self._phase_progress_text(step_phase, state)
+            label = prefix + self._phase_text(step_phase) + ("\n" + suffix if suffix else "")
+            self.phase_steps[step_phase].configure(text=label, bg=background, fg=foreground)
+        value = current_percent(p)
+        if value is not None:
+            self.percent_var.set(f"{value:.0f}%")
             self.progressbar.stop()
-            self.progressbar.configure(mode="determinate", maximum=100, value=min(percent_values))
-        elif self._progress.get("active"):
-            self.percent_var.set("—")
-            if self.progressbar.cget("mode") != "indeterminate":
+            self.progressbar.configure(mode="determinate", maximum=100, value=value)
+        elif p.get("active"):
+            self.percent_var.set("LIVE" if p.get("caught_up") and phase == "downloading" else "—")
+            if not getattr(self, "_meter_running", False):
                 self.progressbar.configure(mode="indeterminate")
-                self.progressbar.start(10)
+                self.progressbar.start(30)
+                self._meter_running = True
         else:
-            self.percent_var.set("0%")
+            self.percent_var.set("—")
             self.progressbar.stop()
             self.progressbar.configure(mode="determinate", maximum=100, value=0)
+        if value is not None or not p.get("active"):
+            self._meter_running = False
+        self.detail_var.set(p.get("detail") or p.get("phase_detail") or "")
         self.metrics_var.set(self._progress_summary())
 
-    @staticmethod
-    def _format_bytes(value) -> str:
-        if not isinstance(value, (int, float)) or value < 0:
-            return "?"
-        size = float(value)
-        for unit in ("B", "KiB", "MiB", "GiB"):
-            if size < 1024 or unit == "GiB":
-                return f"{size:.1f} {unit}" if unit != "B" else f"{size:.0f} B"
-            size /= 1024
-        return "?"
+    _format_bytes = staticmethod(format_bytes)
 
-    def _progress_summary(self) -> str:
+    def _progress_summary(self):
+        p = self._progress
         parts = []
-        elapsed = self._progress.get("elapsed")
-        started_at = self._progress.get("started_at")
-        if self._progress.get("active") and isinstance(started_at, (int, float)):
-            elapsed = max(0.0, monotonic() - started_at)
-        if isinstance(elapsed, (int, float)):
-            parts.append(self._t(
-                ("経過 " if self._progress.get("active") else "所要時間 ") + format_elapsed(elapsed),
-                ("Elapsed " if self._progress.get("active") else "Duration ") + format_elapsed(elapsed),
-            ))
-        catchup_percent = self._catchup_percent()
-        if self._progress.get("catchup"):
-            if self._progress.get("caught_up"):
-                parts.append(self._t("追いつき完了 / LIVE", "Catch-up complete / LIVE"))
-            elif catchup_percent is not None:
-                gaps = [item.get("gap_fragments") for item in self._progress["catchup"].values()
-                        if isinstance(item.get("gap_fragments"), int)]
-                gap = max(gaps) if gaps else None
-                parts.append(self._t(
-                    f"追いつき {catchup_percent:.1f}%" + (f" / 残り約{gap} frag" if gap is not None else ""),
-                    f"Catch-up {catchup_percent:.1f}%" + (f" / about {gap} frag left" if gap is not None else "")))
-        for stream, state in sorted(self._progress.get("streams", {}).items()):
-            label = str(stream)
-            percent = state.get("percent")
-            if isinstance(percent, (int, float)):
-                label += f" {float(percent):.1f}%"
-            fragment_index, fragment_count = state.get("fragment_index"), state.get("fragment_count")
-            if isinstance(fragment_index, int) and isinstance(fragment_count, int) and fragment_count > 0:
-                label += f" ({fragment_index}/{fragment_count} fragments)"
-            elif isinstance(state.get("downloaded_bytes"), int):
-                downloaded = self._format_bytes(state["downloaded_bytes"])
-                total = self._format_bytes(state.get("total_bytes"))
-                label += f" ({downloaded}/{total})"
-            if isinstance(state.get("speed"), (int, float)) and state["speed"] > 0:
-                label += f" @ {self._format_bytes(state['speed'])}/s"
-            parts.append(label)
-        if self._progress.get("outputs"):
-            parts.append(self._t(f"保存済み {self._progress['outputs']}件", f"Saved {self._progress['outputs']}"))
-        return "  •  ".join(parts) or self._t("まだ進行情報はありません", "No progress data yet")
+        elapsed = p.get("elapsed")
+        if p.get("active") and p.get("started_at") is not None:
+            elapsed = max(0, monotonic() - p["started_at"])
+        if elapsed is not None:
+            parts.append(self._t("経過 " if p.get("active") else "所要時間 ",
+                                 "Elapsed " if p.get("active") else "Duration ") + format_elapsed(elapsed))
+        parts.append(progress_text(p, self.vars["language"].get()))
+        if p.get("outputs"):
+            parts.append(self._t(f"保存済み {p['outputs']}件", f"Saved {p['outputs']}"))
+        return "  •  ".join(parts)
 
     def _poll(self):
         events = self.supervisor.events.drain()
         log_events = []
         for event in events:
-            self._handle_progress_event(event)
+            self._handle_progress_event(event, render=False)
             if event["event"] == "done":
                 self.start_button.configure(state="normal")
                 if self.closing:
                     self.destroy()
                     return
-            if event["event"] not in {"phase", "progress", "fragment", "catchup", "streams", "snapshot"}:
+            if event["event"] not in TELEMETRY | {"phase", "streams", "snapshot", "download_context"}:
                 log_events.append(event)
         if log_events:
             self._log("\n".join(e.get("message") or json.dumps(e, ensure_ascii=False) for e in log_events))
-        if self._progress.get("active"):
+        if events or self._progress.get("active"):
             self._render_progress()
         self.after(100, self._poll)
 

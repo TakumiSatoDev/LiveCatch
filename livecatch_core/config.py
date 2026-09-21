@@ -13,11 +13,11 @@ LEGACY_DEFAULT_TEMPLATE_V3 = "%(extractor_key)s/%(upload_date)s_%(channel)s_%(ti
 LEGACY_DEFAULT_TEMPLATE_V2 = LEGACY_DEFAULT_TEMPLATE_V3.removeprefix("%(extractor_key)s/")
 DEFAULT_TEMPLATE = "%(uploader_id)s/%(upload_date)s_%(id)s_%(title)s/%(upload_date)s_%(title)s.%(ext)s"
 QUALITY = {
-    "recommended_1080p": "bv*[height<=1080]+ba/b[height<=1080]/b",
-    "catchup_720p30": "bv*[height<=720][fps<=30]+ba/b[height<=720][fps<=30]/bv*[height<=720]+ba/b[height<=720]/b",
-    "catchup_480p30": "bv*[height<=480][fps<=30]+ba/b[height<=480][fps<=30]/bv*[height<=480]+ba/b[height<=480]/b",
+    "recommended_1080p": "bv*[height<=1080]+ba/b[height<=1080]",
+    "catchup_720p30": "bv*[height<=720][fps<=30]+ba/b[height<=720][fps<=30]/bv*[height<=720]+ba/b[height<=720]",
+    "catchup_480p30": "bv*[height<=480][fps<=30]+ba/b[height<=480][fps<=30]/bv*[height<=480]+ba/b[height<=480]",
     "best": "bv*+ba/b",
-    **{f"{h}p": f"bv*[height<={h}]+ba/b[height<={h}]/b" for h in (1440, 1080, 720, 480, 360)},
+    **{f"{h}p": f"bv*[height<={h}]+ba/b[height<={h}]" for h in (1440, 1080, 720, 480, 360)},
 }
 BROWSERS = ("chrome", "edge", "firefox", "brave", "vivaldi", "opera")
 

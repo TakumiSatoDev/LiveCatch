@@ -43,6 +43,9 @@ def app(tmp_path, monkeypatch):
 def test_watch_tab_registration_persistence_and_language(app):
     assert len(app.notebook.tabs()) == 3
     assert not app.watch_manager.running
+    app.vars['quality_preset'].set('best')
+    app._save_recording_settings()
+    assert app.store.load().quality_preset == 'best'
     app.watch_input.set('alice,https://twitch.tv/Bob alice')
     app._watch_add()
     assert app.watch_tree.get_children() == ('alice','bob')
@@ -56,6 +59,8 @@ def test_watch_tab_registration_persistence_and_language(app):
     assert not app.start_button.winfo_ismapped()
     app.notebook.select(app.record_tab); app.update()
     assert app.start_button.winfo_ismapped()
+    assert app.progressbar.winfo_ismapped()
+    assert app.progressbar.winfo_rooty() < app.winfo_rooty()+app.winfo_height()
     assert app.watch_tree.get_children() == ('alice','bob')
     app.watch_tree.selection_set('bob'); app._watch_remove()
     assert app.watch_tree.get_children() == ('alice',)
