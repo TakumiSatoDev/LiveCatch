@@ -15,7 +15,7 @@ from threading import Event, Thread
 from .channels import YOUTUBE_ID, validate_recording_url
 from .config import Settings, normalize_url
 from .events import Emitter
-from .options import ydl_options
+from .options import ydl_options, youtube_recovery_format
 from .progress import stream_key, number
 from .tools import find_tool
 from .ytdlp_patch import fragment_patch, ffmpeg_stop_bridge
@@ -23,7 +23,7 @@ from .ui_text import configure_windows_utf8
 
 
 def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | None = None,
-           youtube_video_id: str | None = None) -> int:
+           youtube_video_id: str | None = None, youtube_recovery: bool = False) -> int:
     import yt_dlp
     from yt_dlp.postprocessor.common import PostProcessor
     from yt_dlp.utils import PostProcessingError
@@ -42,15 +42,56 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
     for directory in (settings.save_dir, settings.temp_dir if settings.use_temp_dir else settings.save_dir):
         Path(directory).expanduser().mkdir(parents=True, exist_ok=True)
 
+    recovery_abort = Event()
+
     class Logger:
+        def __init__(self):
+            self.auth_failures = 0
+            self.repeated: dict[str, int] = {}
+
+        @staticmethod
+        def _signature(message: str) -> str:
+            return re.sub(r"0x[0-9A-Fa-f]+", "0x…", str(message)).strip()
+
+        def _handle(self, kind: str, message) -> None:
+            text = str(message or "").strip()
+            if not text:
+                return
+            auth = youtube_video_id is not None and (
+                "HTTP Error 401" in text or "HTTP Error 403" in text)
+            if auth:
+                self.auth_failures += 1
+                if self.auth_failures == 1:
+                    emit("warning", message=(
+                        "YouTube media fragments were rejected (HTTP 401/403). "
+                        "LiveCatch will stop this burst instead of retrying every fragment."))
+                if (self.auth_failures >= 3 and not youtube_recovery
+                        and not recovery_abort.is_set()):
+                    recovery_abort.set()
+                    emit("youtube_recovery", reason="fragment_auth",
+                         count=self.auth_failures)
+                    emit("warning", message=(
+                        "Switching the next retry to YouTube recovery mode: "
+                        "fresh live-edge URLs, <=4 fragment workers, combined A/V format preferred."))
+                    cancel.set()
+                return
+
+            signature = self._signature(text)
+            count = self.repeated.get(signature, 0) + 1
+            self.repeated[signature] = count
+            if count == 1:
+                emit(kind, message=text)
+            elif count in (10, 50, 100):
+                emit("warning", message=f"Repeated {count}×: {signature[:500]}")
+
         def debug(self, message):
-            if not message.startswith("[debug]"):
-                emit("log", message=message)
+            if not str(message).startswith("[debug]"):
+                self._handle("log", message)
         info = debug
         def warning(self, message):
-            emit("warning", message=message)
+            self._handle("warning", message)
         def error(self, message):
-            emit("error", message=message)
+            self._handle("error", message)
 
     class ValidateDownload(PostProcessor):
         def run(self, info):
@@ -110,6 +151,12 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
             raise RuntimeError("Twitch broadcast changed/ended before catch-up recording started.")
 
     options = ydl_options(settings, ffmpeg)
+    if youtube_recovery:
+        options["live_from_start"] = False
+        options["concurrent_fragment_downloads"] = min(
+            int(options.get("concurrent_fragment_downloads", 1)), 4)
+        options["format"] = youtube_recovery_format(settings)
+        options["fragment_retries"] = 1
     if twitch_stream_id is not None or youtube_video_id is not None:
         # Monitoring decides whether to catch up from the available DVR/start or
         # join the live edge. Never wait for a different future broadcast after
@@ -157,7 +204,15 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.add_post_processor(ValidateDownload(ydl), when="before_dl")
             ydl.add_post_processor(CaptureOutput(ydl), when="after_move")
-            code = ydl.download([normalize_url(settings.url)])
+            try:
+                code = ydl.download([normalize_url(settings.url)])
+            except (KeyboardInterrupt, CancelledError):
+                if recovery_abort.is_set():
+                    raise RuntimeError(
+                        "YouTube fragment authorization failed; recovery retry requested")
+                raise
+    if recovery_abort.is_set():
+        raise RuntimeError("YouTube fragment authorization failed; recovery retry requested")
     if code:
         return code
     if cancel.is_set():
@@ -186,7 +241,9 @@ def main() -> int:
 
     try:
         args = sys.argv[1:]
-        if args and (len(args) != 2 or args[0] not in ("--twitch-watch-record", "--youtube-watch-record")):
+        allowed = ("--twitch-watch-record", "--youtube-watch-record",
+                   "--youtube-watch-record-recovery")
+        if args and (len(args) != 2 or args[0] not in allowed):
             raise ValueError("Unknown worker arguments")
         expected_stream = args[1] if args else None
         settings = Settings.from_dict(json.loads(sys.stdin.readline()))
@@ -208,8 +265,10 @@ def main() -> int:
             cancel.set()  # Parent disappeared; don't continue new native fragments.
 
         Thread(target=control, daemon=True, name="lc-control").start()
-        if args and args[0] == "--youtube-watch-record":
-            code = record(settings, cancel, publish, youtube_video_id=expected_stream)
+        if args and args[0] in ("--youtube-watch-record", "--youtube-watch-record-recovery"):
+            code = record(
+                settings, cancel, publish, youtube_video_id=expected_stream,
+                youtube_recovery=args[0] == "--youtube-watch-record-recovery")
         else:
             code = record(settings, cancel, publish, twitch_stream_id=expected_stream)
         status = "completed" if code == 0 else "cancelled" if code == 130 else "failed"
