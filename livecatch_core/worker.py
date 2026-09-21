@@ -163,9 +163,9 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
         options["fragment_retries"] = 1
     if twitch_stream_id is not None or youtube_video_id is not None:
         # Monitoring decides whether to catch up from the available DVR/start or
-        # join the live edge. Never wait for a different future broadcast after
-        # we have already validated an exact broadcast identity.
-        options["live_from_start"] = settings.live_from_start
+        # join the live edge. Recovery mode explicitly forces fresh live-edge
+        # URLs after repeated YouTube fragment authorization failures.
+        options["live_from_start"] = False if youtube_recovery else settings.live_from_start
         options.pop("wait_for_video", None)
     options["logger"] = Logger()
     def progress(p):
