@@ -17,6 +17,27 @@ def _output_template(settings: Settings) -> str:
     return f"{service}/{template}"
 
 
+
+
+def youtube_recovery_format(settings: Settings) -> str:
+    """Prefer one combined YouTube stream during auth-recovery retries.
+
+    Recovery is only used after the normal high-quality/from-start attempt failed
+    with repeated 401/403 fragment errors. Respect explicit height caps.
+    """
+    caps = {
+        "catchup_480p30": 480, "480p": 480,
+        "catchup_720p30": 720, "720p": 720,
+        "1080p": 1080, "recommended_1080p": 1080,
+        "1440p": 1440,
+    }
+    height = caps.get(settings.quality_preset)
+    cap = f"[height<={height}]" if height else ""
+    # A combined A/V format avoids a second authenticated media URL. If none is
+    # available, retain a capped separate-stream fallback instead of failing the
+    # selector immediately.
+    return f"b{cap}/b/bv*{cap}+ba/b{cap}"
+
 def ydl_options(settings: Settings, ffmpeg: str | None = None) -> dict:
     settings.validate()
     paths = {"home": str(Path(settings.save_dir).expanduser())}
