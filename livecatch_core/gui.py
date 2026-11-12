@@ -56,6 +56,12 @@ LABELS = {
     "gpu_device": ("GPU番号", "GPU device"), "export_height": ("出力の高さ（0＝元サイズ）", "Export height (0 = original)"),
     "gpu_jobs": ("同時変換数", "Concurrent exports"),
     "gpu_preset": ("NVENC速度プリセット", "NVENC speed preset"),
+    "save_live_chat": ("ライブチャット／コメントを保存", "Save live chat"),
+    "save_extras": ("サムネイル・概要欄・字幕を保存", "Save thumbnail, description, subtitles"),
+    "record_stats": ("同時接続数などの統計を記録", "Record viewer statistics"),
+    "stats_interval": ("統計の記録間隔（秒）", "Statistics interval (seconds)"),
+    "detect_highlights": ("録画後に見所を自動検出", "Detect highlights after recording"),
+    "highlight_sensitivity": ("見所検出の感度", "Highlight sensitivity"),
 }
 CHOICES = {"mode": ("reservation", "live_full", "catchup_stop"), "browser": BROWSERS,
            "quality_preset": tuple(QUALITY), "output_format": ("mp4", "mkv", "webm"),
@@ -64,7 +70,9 @@ CHOICES = {"mode": ("reservation", "live_full", "catchup_stop"), "browser": BROW
            "prefetch": (1, 2, 3, 4, 5, 6, 7, 8),
            "export_height": (0, 360, 480, 720, 1080, 1440, 2160),
            "gpu_jobs": (1, 2, 3, 4, 5, 6, 7, 8),
-           "gpu_preset": ("balanced", "fast", "max_speed")}
+           "gpu_preset": ("balanced", "fast", "max_speed"),
+           "stats_interval": (30, 60, 120, 300, 600),
+           "highlight_sensitivity": ("low", "normal", "high")}
 
 
 class LiveCatchApp(tk.Tk):
@@ -159,6 +167,15 @@ class LiveCatchApp(tk.Tk):
             frame = ttk.LabelFrame(self.settings_tab, text=self._t(*title), padding=8)
             frame.grid(row=0, column=index, sticky="nsew", padx=4, pady=4)
             add_fields(frame, names)
+        data_frame = ttk.LabelFrame(self.settings_tab, text=self._t(
+            "配信データ・見所検出", "Stream data / highlights"), padding=8)
+        data_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=4, pady=4)
+        data_left, data_right = ttk.Frame(data_frame), ttk.Frame(data_frame)
+        data_left.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
+        data_right.grid(row=0, column=1, sticky="nsew")
+        data_frame.columnconfigure(1, weight=1)
+        add_fields(data_left, ("save_live_chat", "save_extras", "record_stats"))
+        add_fields(data_right, ("detect_highlights", "highlight_sensitivity", "stats_interval"))
         ttk.Button(self.settings_tab, text=self._t("保存・画質・取得設定を保存", "Save recording settings"),
                    command=self._save_recording_settings).grid(row=2, column=0, columnspan=2, sticky="w", pady=6)
         self.manual_help = ttk.Label(self.body, wraplength=960, text=self._t(

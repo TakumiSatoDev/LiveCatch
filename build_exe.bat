@@ -6,7 +6,7 @@ python -m pip install -r requirements-dev.txt
 if errorlevel 1 exit /b 1
 python -m pytest -q
 if errorlevel 1 exit /b 1
-python -m PyInstaller --noconfirm --clean --onefile --console --name LiveCatchWorker --collect-all yt_dlp --collect-all yt_dlp_ejs livecatch_worker.py
+python -m PyInstaller --noconfirm --clean --onefile --console --name LiveCatchWorker --collect-all yt_dlp --collect-all yt_dlp_ejs --hidden-import livecatch_core.sidecar --hidden-import livecatch_core.twitch_chat --hidden-import livecatch_core.highlights livecatch_worker.py
 if errorlevel 1 exit /b 1
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name LiveCatch --collect-all yt_dlp --collect-all yt_dlp_ejs --collect-all pystray --hidden-import pystray._win32 --collect-all PIL livecatch.py
 if errorlevel 1 exit /b 1

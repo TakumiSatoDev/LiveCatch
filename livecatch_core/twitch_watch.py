@@ -453,7 +453,7 @@ class WatchManager:
                     "downloading": "catching_up" if s.catchup_active and not s.caught_up else "recording",
                     "postprocessing": "postprocessing",
                 }.get(s.phase, s.status)
-            if kind in ("error", "warning", "output", "exported"):
+            if kind in ("error", "warning", "output", "exported", "highlights"):
                 message = str(event.get("message") or event.get("path", kind))
                 s.detail = redact(message)[:400]
                 self._log(login, message)

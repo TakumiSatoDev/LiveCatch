@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.0.0 (unreleased)
+
+### Added
+
+- Stream data sidecar: YouTube live chat / chat replay (`*.live_chat.json`, yt-dlp format), anonymous read-only Twitch chat over IRC/TLS (`*.chat.jsonl`), and periodic viewer/title statistics (`*.stats.jsonl`). It runs in a separate, unpatched process and can never fail the recording.
+- Thumbnail and description are saved with the recording; subtitles of finished videos are fetched by the sidecar (a subtitle error cannot abort a download).
+- Highlight detector: robust chat-rate surge detection (trailing median/MAD baseline), reaction labels (laugh, applause, surprise, cute, hype, clip, emotional), paid/gift/bits bursts and viewer surges. Writes `*.highlights.txt` and `*.highlights.json` after each recording; `python -m livecatch_core highlights` re-analyzes with `--shift` / `--sensitivity`.
+- Settings: "Stream data / highlights" group (chat, extras, statistics, interval, highlight detection and sensitivity). Retries of the same broadcast append chat instead of overwriting it and keep the original video-start estimate.
+
 ## v3.5.3
 
 ### Fixed

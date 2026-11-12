@@ -65,6 +65,14 @@ class Settings:
     export_height: int = 0
     gpu_jobs: int = 1
     gpu_preset: str = "balanced"
+    # v4 stream data. Chat/stats/subtitles run in a separate sidecar process
+    # and can never fail the recording itself.
+    save_live_chat: bool = True
+    save_extras: bool = True
+    record_stats: bool = True
+    stats_interval: int = 60
+    detect_highlights: bool = True
+    highlight_sensitivity: str = "normal"
 
     @classmethod
     def from_dict(cls, data: dict) -> Settings:
@@ -98,12 +106,14 @@ class Settings:
             "engine": ("bounded", "stock"),
             "gpu_export": ("off", "auto", "cuda", "cpu"),
             "gpu_preset": ("balanced", "fast", "max_speed"),
+            "highlight_sensitivity": ("low", "normal", "high"),
         }
         for name, allowed in choices.items():
             if getattr(self, name) not in allowed:
                 raise ValueError(f"Invalid {name}: {getattr(self, name)!r}")
         for name, lo, hi in (("wait_seconds", 5, 3600), ("concurrent_fragments", 1, 256),
-                             ("prefetch", 1, 8), ("gpu_device", 0, 31), ("gpu_jobs", 1, 8)):
+                             ("prefetch", 1, 8), ("gpu_device", 0, 31), ("gpu_jobs", 1, 8),
+                             ("stats_interval", 30, 600)):
             if type(getattr(self, name)) is not int or not lo <= getattr(self, name) <= hi:
                 raise ValueError(f"{name} must be in {lo}..{hi}")
         if self.export_height not in (0, 360, 480, 720, 1080, 1440, 2160):

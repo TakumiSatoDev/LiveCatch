@@ -9,7 +9,9 @@ import _thread
 import json
 import re
 from pathlib import Path
+import subprocess
 import sys
+import time
 from threading import Event, Thread
 
 from .channels import YOUTUBE_ID, validate_recording_url
@@ -20,6 +22,148 @@ from .progress import stream_key, number
 from .tools import find_tool
 from .ytdlp_patch import fragment_patch, ffmpeg_stop_bridge
 from .ui_text import configure_windows_utf8
+
+
+def media_duration(path: str | None, ffprobe: str | None) -> float | None:
+    if not path or not ffprobe or not Path(path).is_file():
+        return None
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=60, check=False).stdout.strip()
+        return float(out) if out else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _write_json(path: Path, data: dict) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+class StreamData:
+    """Sidecar (chat/stats/subtitles) and highlight bookkeeping for one recording."""
+
+    def __init__(self, settings: Settings, emit, ffprobe: str | None, factory=None):
+        self.settings, self.emit, self.ffprobe = settings, emit, ffprobe
+        self.factory = factory
+        self.sidecar = None
+        self.base: Path | None = None
+        self.manifest: dict = {}
+        self.live = False
+        self.output: str | None = None
+
+    @property
+    def wanted(self) -> bool:
+        s = self.settings
+        return s.save_live_chat or s.record_stats or s.save_extras or s.detect_highlights
+
+    def start(self, info: dict, filename: str, *, from_start: bool) -> None:
+        from .sidecar import Job, SidecarProcess
+        from .twitch_watch import normalize_channel
+
+        if not self.wanted or self.base is not None:
+            return
+        extractor = str(info.get("extractor_key") or "")
+        service = "twitch" if extractor.lower().startswith("twitch") else "youtube"
+        self.live = info.get("is_live") is True
+        self.base = Path(filename).expanduser().absolute().with_suffix("")
+        now_ms = int(time.time() * 1000)
+        start_ms = None
+        if self.live:
+            stamp = info.get("release_timestamp") or info.get("timestamp")
+            start_ms = int(stamp * 1000) if from_start and isinstance(stamp, (int, float)) and stamp > 0 \
+                else now_ms
+        video_id = str(info.get("id") or "")
+        manifest_path = Path(str(self.base) + ".livecatch.json")
+        try:
+            previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            previous = {}
+        if isinstance(previous, dict) and previous.get("video_id") == video_id \
+                and type(previous.get("video_start_epoch_ms")) is int:
+            start_ms = previous["video_start_epoch_ms"]  # retry of the same broadcast
+        login = ""
+        if service == "twitch":
+            try:
+                login = normalize_channel(self.settings.url)
+            except ValueError:
+                login = str(info.get("uploader_id") or "")
+            url = f"https://www.twitch.tv/{login}" if self.live and login else str(
+                info.get("webpage_url") or self.settings.url)
+        else:
+            url = f"https://www.youtube.com/watch?v={video_id}"
+        self.manifest = {
+            "livecatch_stream_data": 1, "service": service, "video_id": video_id, "url": url,
+            "title": str(info.get("title") or "")[:300], "live": self.live,
+            "from_start": bool(from_start), "recording_started_epoch_ms": now_ms,
+            "video_start_epoch_ms": start_ms,
+            "timing_note": ("live chat times are mapped with the estimated video start"
+                            if self.live else "chat replay offsets are exact"),
+        }
+        try:
+            self.base.parent.mkdir(parents=True, exist_ok=True)
+            _write_json(manifest_path, self.manifest)
+        except OSError as exc:
+            self.emit("warning", message=f"Could not write stream-data manifest: {exc}")
+        s = self.settings
+        job = Job(service=service, url=url, base=str(self.base), live=self.live,
+                  chat=s.save_live_chat, stats=s.record_stats, subtitles=s.save_extras,
+                  stats_interval=s.stats_interval, twitch_login=login if service == "twitch" else "",
+                  cookies_browser=s.browser if s.cookies_from_browser else "")
+        if not (job.chat or (job.stats and job.live) or (job.subtitles and not job.live)):
+            return
+        try:
+            self.sidecar = (self.factory or SidecarProcess)(job, self.emit)
+            parts = [name for name, on in (("chat", job.chat), ("stats", job.stats and job.live),
+                                           ("subtitles", job.subtitles and not job.live)) if on]
+            self.emit("log", message="Stream data: " + ", ".join(parts))
+        except Exception as exc:
+            self.emit("warning", message=f"Stream data sidecar failed to start: {type(exc).__name__}: {exc}")
+
+    def finish(self, cancel: Event) -> None:
+        if self.base is None:
+            return
+        if self.sidecar is not None:
+            try:
+                if self.live or cancel.is_set():
+                    self.sidecar.close()
+                else:
+                    # Chat replay / subtitles of a finished video end on their own.
+                    if not self.sidecar.wait(None, cancel=cancel):
+                        self.sidecar.close()
+            except Exception as exc:
+                self.emit("warning", message=f"Stream data sidecar: {type(exc).__name__}: {exc}")
+        duration = media_duration(self.output, self.ffprobe)
+        if duration:
+            self.manifest["duration"] = round(duration, 3)
+        if self.output:
+            self.manifest["video"] = Path(self.output).name
+        try:
+            _write_json(Path(str(self.base) + ".livecatch.json"), self.manifest)
+        except OSError:
+            pass
+        if not self.settings.detect_highlights:
+            return
+        from .highlights import analyze_recording
+        try:
+            result = analyze_recording(self.base, sensitivity=self.settings.highlight_sensitivity,
+                                       language=self.settings.language)
+        except Exception as exc:
+            self.emit("warning", message=f"Highlight detection failed: {type(exc).__name__}: {exc}")
+            return
+        if result is None:
+            return
+        report, json_path, txt_path = result
+        found = report["highlights"]
+        top = sorted(found, key=lambda h: h["rank"])[:3]
+        ja = self.settings.language != "en"
+        summary = " / ".join(f"{h['start_hms']} {h['label_text']}" for h in top)
+        message = (f"見所 {len(found)}件: {summary} → {txt_path.name}" if ja
+                   else f"{len(found)} highlights: {summary} → {txt_path.name}")
+        self.emit("highlights", message=message, path=str(txt_path), json=str(json_path),
+                  count=len(found))
 
 
 def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | None = None,
@@ -43,6 +187,7 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
         Path(directory).expanduser().mkdir(parents=True, exist_ok=True)
 
     recovery_abort = Event()
+    stream_data = StreamData(settings, emit, ffprobe)
 
     class Logger:
         def __init__(self):
@@ -131,6 +276,13 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
             live = info.get("is_live") is True
             supported = bool(live and settings.engine == "bounded" and all(
                 "http_dash_segments_generator" in f.get("protocol", "") for f in formats))
+            from_start = bool(live and options.get("live_from_start") and (
+                info.get("extractor_key") == "TwitchVod" or all(
+                    "http_dash_segments_generator" in f.get("protocol", "") for f in formats)))
+            try:
+                stream_data.start(info, self._downloader.prepare_filename(info), from_start=from_start)
+            except Exception as exc:  # stream data must never fail the recording
+                emit("warning", message=f"Stream data disabled: {type(exc).__name__}: {exc}")
             emit("download_context", live=live, streams=len(formats),
                  catchup=bool(supported and options.get("live_from_start")
                               and settings.mode != "catchup_stop"),
@@ -142,6 +294,7 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
         def run(self, info):
             filename = info.get("filepath")
             if filename and Path(filename).is_file():
+                stream_data.output = filename
                 emit("output", path=filename)
             return [], info
 
@@ -204,19 +357,22 @@ def record(settings: Settings, cancel: Event, emit, *, twitch_stream_id: str | N
         catchup=bool(options.get("live_from_start")) and settings.mode != "catchup_stop",
         emit=emit)
     emit("phase", name="extracting")
-    with ffmpeg_stop_bridge(cancel), (adapter if settings.engine == "bounded" else nullcontext()):
-        with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.add_post_processor(ValidateDownload(ydl), when="before_dl")
-            ydl.add_post_processor(CaptureOutput(ydl), when="after_move")
-            try:
-                code = ydl.download([normalize_url(settings.url)])
-            except (KeyboardInterrupt, CancelledError):
-                if recovery_abort.is_set():
-                    raise RuntimeError(
-                        "YouTube fragment authorization failed; "
-                        + ("recovery mode also failed" if youtube_recovery
-                           else "recovery retry requested"))
-                raise
+    try:
+        with ffmpeg_stop_bridge(cancel), (adapter if settings.engine == "bounded" else nullcontext()):
+            with yt_dlp.YoutubeDL(options) as ydl:
+                ydl.add_post_processor(ValidateDownload(ydl), when="before_dl")
+                ydl.add_post_processor(CaptureOutput(ydl), when="after_move")
+                try:
+                    code = ydl.download([normalize_url(settings.url)])
+                except (KeyboardInterrupt, CancelledError):
+                    if recovery_abort.is_set():
+                        raise RuntimeError(
+                            "YouTube fragment authorization failed; "
+                            + ("recovery mode also failed" if youtube_recovery
+                               else "recovery retry requested"))
+                    raise
+    finally:
+        stream_data.finish(cancel)
     if recovery_abort.is_set():
         raise RuntimeError(
             "YouTube fragment authorization failed; "
@@ -239,6 +395,9 @@ def main() -> int:
     if sys.argv[1:] == ["--youtube-probe"]:
         from .youtube_watch_probe import main as probe_main
         return probe_main()
+    if sys.argv[1:] == ["--sidecar"]:
+        from .sidecar import main as sidecar_main
+        return sidecar_main()
     emit = Emitter(sys.stdout)
     cancel = Event()
     phase = {"name": "starting"}

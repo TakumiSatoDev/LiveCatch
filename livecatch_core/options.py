@@ -73,6 +73,11 @@ def ydl_options(settings: Settings, ffmpeg: str | None = None) -> dict:
             "fragment": lambda n: min(2 ** n, 30),
         },
     }
+    if settings.save_extras:
+        # Thumbnail/description failures are warnings in yt-dlp, never fatal.
+        # Subtitles are fetched by the sidecar: a subtitle error would abort here.
+        result["writethumbnail"] = True
+        result["writedescription"] = True
     if settings.mode == "reservation":
         result["wait_for_video"] = (settings.wait_seconds, settings.wait_seconds)
     if settings.cookies_from_browser:
