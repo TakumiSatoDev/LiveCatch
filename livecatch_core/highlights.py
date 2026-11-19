@@ -1,6 +1,7 @@
 """Highlight ("見所") detection from recorded chat and stream statistics.
 
-Pure analysis plus small file writers; no network, no GUI, no yt-dlp.
+Pure analysis: no file I/O, network, GUI or yt-dlp. Reading sidecar files and
+writing reports lives in :mod:`highlight_report`.
 
 Detectors
 ---------
@@ -19,17 +20,13 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-import json
 import math
-import os
-from pathlib import Path
 import re
 import statistics
-import tempfile
 import time
 from typing import Iterable, Sequence
 
-from .chat import PAID_KINDS, ChatEvent, iter_chat_file
+from .chat import PAID_KINDS, ChatEvent
 
 VERSION = 1
 SENSITIVITY = {"low": 4.0, "normal": 3.0, "high": 2.2}
@@ -280,6 +277,16 @@ def detect_viewers(samples: list[tuple[float, int]], opts: Options) -> list[High
     return found
 
 
+GENERIC_LABELS = frozenset({"chat", "paid", "viewers"})
+
+
+def _merged_label(primary: Highlight, other: Highlight) -> str:
+    """Prefer a specific reaction label (爆笑, 拍手…) over a generic detector name."""
+    if primary.label in GENERIC_LABELS and other.label not in GENERIC_LABELS:
+        return other.label
+    return primary.label
+
+
 def merge(highlights: list[Highlight]) -> list[Highlight]:
     """Merge overlapping highlights from different detectors into one entry."""
     merged: list[Highlight] = []
@@ -290,8 +297,7 @@ def merge(highlights: list[Highlight]) -> list[Highlight]:
             combined = Highlight(
                 start=min(top.start, item.start), peak=primary.peak, end=max(top.end, item.end),
                 score=round(primary.score + 0.25 * other.score, 2), kind=primary.kind,
-                label=primary.label if primary.label not in ("chat", "paid", "viewers") or
-                other.label in ("chat", "paid", "viewers") else other.label,
+                label=_merged_label(primary, other),
                 messages=max(top.messages, item.messages), ratio=max(top.ratio, item.ratio),
                 paid=max(top.paid, item.paid),
                 viewers_delta=max(top.viewers_delta, item.viewers_delta),
@@ -385,146 +391,3 @@ def analyze(events: Iterable[ChatEvent], *, video_start_ms: int | None = None,
                     "max": max((v for _p, v in viewers), default=None)},
         "highlights": result,
     }
-
-
-# --- Files ----------------------------------------------------------------
-
-SIDE_SUFFIXES = (".live_chat.json", ".chat.jsonl", ".stats.jsonl", ".livecatch.json",
-                 ".highlights.json", ".highlights.txt")
-VIDEO_SUFFIXES = (".mp4", ".mkv", ".webm", ".m4a", ".ts")
-
-
-def base_of(path: Path) -> Path:
-    """``dir/name.mp4`` / ``dir/name.live_chat.json`` → ``dir/name``."""
-    path = Path(path)
-    for suffix in SIDE_SUFFIXES + VIDEO_SUFFIXES + (".info.json",):
-        if path.name.endswith(suffix):
-            return path.with_name(path.name[:-len(suffix)])
-    return path
-
-
-def read_stats(path: Path) -> list[tuple[int, int]]:
-    samples = []
-    try:
-        handle = Path(path).open("rb")
-    except FileNotFoundError:
-        return samples
-    with handle:
-        for raw in handle:
-            try:
-                data = json.loads(raw)
-            except ValueError:
-                continue
-            if isinstance(data, dict) and type(data.get("t")) is int and type(data.get("viewers")) is int:
-                samples.append((data["t"], data["viewers"]))
-    return samples
-
-
-def read_manifest(base: Path) -> dict:
-    path = Path(str(base) + ".livecatch.json")
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _atomic_write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as out:
-            out.write(text)
-        os.replace(name, path)
-    finally:
-        Path(name).unlink(missing_ok=True)
-
-
-def render_text(report: dict, title: str = "", language: str = "ja") -> str:
-    ja = language != "en"
-    chat = report["chat"]
-    lines = [f"LiveCatch {'見所' if ja else 'highlights'}: {title}".rstrip(": "), ""]
-    if ja:
-        lines.append(f"コメント {chat['messages']}件 / 参加 {chat['unique_authors']}人 / "
-                     f"平均 {chat['avg_per_minute']}件/分 / 最大 {chat['peak_per_minute']}件/分")
-    else:
-        lines.append(f"{chat['messages']} messages / {chat['unique_authors']} chatters / "
-                     f"avg {chat['avg_per_minute']}/min / peak {chat['peak_per_minute']}/min")
-    if report["viewers"]["max"] is not None:
-        lines.append(("最大同接 " if ja else "Peak viewers ") + str(report["viewers"]["max"]))
-    lines.append("")
-    if not report["highlights"]:
-        lines.append("見所は検出されませんでした。" if ja else "No highlights detected.")
-    for h in report["highlights"]:
-        phrase = " ".join(f"「{p}」" for p in h["phrases"]) if ja else " ".join(f'"{p}"' for p in h["phrases"])
-        lines.append(f"{h['start_hms']}  #{h['rank']:<2} [{h['label_text']}] "
-                     f"{' / '.join(h['reasons'])} {phrase}".rstrip())
-    lines += ["", ("時刻は動画の先頭からの位置です（クリップ開始の目安として少し前に置いています）。"
-                   if ja else "Times are positions in the saved video, placed slightly before each surge.")]
-    if report.get("timing") == "wallclock":
-        lines.append("ライブ録画のため時刻は推定です。ずれる場合は `highlights --shift 秒` で補正できます。"
-                     if ja else "Live recording: times are estimated. Use `highlights --shift SECONDS` to correct.")
-    return "\n".join(lines) + "\n"
-
-
-def analyze_recording(path: Path, *, sensitivity: str = "normal", shift: float = 0.0,
-                      duration: float | None = None, language: str = "ja",
-                      max_highlights: int | None = None) -> tuple[dict, Path, Path] | None:
-    """Analyze the sidecar files next to a recording and write the reports.
-
-    Returns ``(report, json_path, txt_path)`` or ``None`` if there is nothing to analyze.
-    """
-    base = base_of(Path(path))
-    manifest = read_manifest(base)
-    chat_path = next((Path(str(base) + s) for s in (".live_chat.json", ".chat.jsonl")
-                      if Path(str(base) + s).is_file()), None)
-    stats = read_stats(Path(str(base) + ".stats.jsonl"))
-    if chat_path is None and not stats:
-        return None
-    events = list(iter_chat_file(chat_path)) if chat_path else []
-    opts = Options.for_sensitivity(sensitivity)
-    if max_highlights is not None:
-        opts.max_highlights = max_highlights
-    start = manifest.get("video_start_epoch_ms")
-    if duration is None:
-        duration = manifest.get("duration") if isinstance(manifest.get("duration"), (int, float)) else 0.0
-    report = analyze(events, video_start_ms=start if type(start) is int else None,
-                     duration=float(duration or 0.0), viewer_samples=stats, opts=opts,
-                     shift=shift, language=language)
-    replay = bool(events) and all(e.offset_ms is not None for e in events)
-    report["timing"] = "replay" if replay else "wallclock"
-    report["source"] = {k: manifest.get(k) for k in ("url", "video_id", "service", "title")
-                        if manifest.get(k)}
-    report["files"] = {"chat": chat_path.name if chat_path else None,
-                       "stats": Path(str(base) + ".stats.jsonl").name if stats else None}
-    json_path, txt_path = Path(str(base) + ".highlights.json"), Path(str(base) + ".highlights.txt")
-    _atomic_write(json_path, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    _atomic_write(txt_path, render_text(report, str(manifest.get("title") or base.name), language))
-    return report, json_path, txt_path
-
-
-def main(argv: list[str] | None = None) -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        prog="python -m livecatch_core highlights",
-        description="Detect highlights from a recording's chat/stats sidecar files.")
-    parser.add_argument("files", nargs="+", type=Path,
-                        help="recording, *.live_chat.json, *.chat.jsonl or base path")
-    parser.add_argument("--sensitivity", choices=tuple(SENSITIVITY), default="normal")
-    parser.add_argument("--shift", type=float, default=0.0,
-                        help="add SECONDS to every chat time (fix live timing drift)")
-    parser.add_argument("--top", type=int, default=None, help="maximum highlights")
-    parser.add_argument("--language", choices=("ja", "en"), default="ja")
-    args = parser.parse_args(argv)
-    status = 0
-    for item in args.files:
-        result = analyze_recording(item, sensitivity=args.sensitivity, shift=args.shift,
-                                   language=args.language, max_highlights=args.top)
-        if result is None:
-            print(f"{item}: no chat/stats sidecar found")
-            status = 1
-            continue
-        report, _json, txt = result
-        print(txt.read_text(encoding="utf-8"))
-    return status

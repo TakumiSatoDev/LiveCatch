@@ -18,7 +18,7 @@ def main():
         from .headless import main as watch
         return watch(sys.argv[2:])
     if sys.argv[1:2] == ["highlights"]:
-        from .highlights import main as highlights
+        from .highlight_report import main as highlights
         return highlights(sys.argv[2:])
     parser = argparse.ArgumentParser(prog="python -m livecatch_core")
     sub = parser.add_subparsers(dest="command", required=True)

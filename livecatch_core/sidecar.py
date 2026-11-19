@@ -20,6 +20,7 @@ from threading import Event, Lock, Thread
 from typing import Callable
 
 from .events import Emitter, redact
+from .stream_files import StreamFiles
 from .tools import find_tool
 
 
@@ -43,6 +44,10 @@ class Job:
             raise ValueError("Sidecar base path must be absolute")
         if not 15 <= self.stats_interval <= 3600:
             raise ValueError("Invalid stats interval")
+
+    @property
+    def files(self) -> StreamFiles:
+        return StreamFiles(Path(self.base))
 
     @classmethod
     def from_dict(cls, data: dict) -> Job:
@@ -96,11 +101,11 @@ def chat_target(base: str) -> tuple[Path, str]:
     A retry of the same broadcast must not overwrite chat already captured, so
     later attempts download into ``base.N`` and are appended on finalize.
     """
-    final = Path(base + ".live_chat.json")
+    final = StreamFiles(Path(base)).youtube_chat
     if not final.exists() or final.stat().st_size == 0:
         return final, base
     n = 1
-    while Path(f"{base}.{n}.live_chat.json").exists():
+    while StreamFiles(Path(f"{base}.{n}")).youtube_chat.exists():
         n += 1
     return final, f"{base}.{n}"
 
@@ -135,7 +140,7 @@ def run_youtube_chat(job: Job, stop: Event, log, ydl_factory=None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        append_and_remove(Path(download_base + ".live_chat.json"), final)
+        append_and_remove(StreamFiles(Path(download_base)).youtube_chat, final)
     if final.exists():
         log(f"Chat saved: {final.name}")
 
@@ -155,7 +160,7 @@ def run_subtitles(job: Job, stop: Event, log, ydl_factory=None) -> None:
 def run_twitch_chat(job: Job, stop: Event, log, connect=None) -> None:
     from .twitch_chat import TwitchChatRecorder, default_connect
 
-    path = Path(job.base + ".chat.jsonl")
+    path = job.files.twitch_chat
     recorder = TwitchChatRecorder(job.twitch_login, path, stop,
                                   connect=connect or default_connect, log=log)
     count = recorder.run()
@@ -185,7 +190,7 @@ def probe_stats(job: Job, log) -> dict:
 
 def run_stats(job: Job, stop: Event, log, probe=probe_stats, clock=time.time, wait=None) -> None:
     wait = wait or stop.wait
-    path = Path(job.base + ".stats.jsonl")
+    path = job.files.stats
     path.parent.mkdir(parents=True, exist_ok=True)
     misses = 0
     with path.open("a", encoding="utf-8", newline="\n") as out:

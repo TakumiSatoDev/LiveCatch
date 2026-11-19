@@ -9,6 +9,7 @@ from threading import Event, Thread
 
 import pytest
 
+from livecatch_core import highlight_report as report
 from livecatch_core import highlights as hl
 from livecatch_core import sidecar as sc
 from livecatch_core.chat import ChatEvent, iter_chat_file, parse_irc, parse_youtube_line, twitch_event
@@ -193,19 +194,19 @@ def test_analyze_recording_writes_reports(tmp_path):
                 "videoOffsetTimeMsec": "0"}, ensure_ascii=False) + "\n")
     (tmp_path / "20260101_title.livecatch.json").write_text(json.dumps(
         {"video_start_epoch_ms": T0, "duration": 2400.0, "title": "テスト配信"}), encoding="utf-8")
-    report, json_path, txt_path = hl.analyze_recording(tmp_path / "20260101_title.mp4")
+    result, json_path, txt_path = report.analyze_recording(tmp_path / "20260101_title.mp4")
     assert json_path.name == "20260101_title.highlights.json"
-    assert report["timing"] == "wallclock" and len(report["highlights"]) == 1
+    assert result["timing"] == "wallclock" and len(result["highlights"]) == 1
     text = txt_path.read_text(encoding="utf-8")
     assert "テスト配信" in text and "[爆笑]" in text and "--shift" in text
-    assert hl.main([str(tmp_path / "20260101_title.mp4")]) == 0
-    assert hl.analyze_recording(tmp_path / "missing.mp4") is None
+    assert report.main([str(tmp_path / "20260101_title.mp4")]) == 0
+    assert report.analyze_recording(tmp_path / "missing.mp4") is None
 
 
 def test_base_of():
-    assert hl.base_of(Path("/a/b.c.mp4")) == Path("/a/b.c")
-    assert hl.base_of(Path("/a/b.live_chat.json")) == Path("/a/b")
-    assert hl.base_of(Path("/a/b")) == Path("/a/b")
+    assert report.base_of(Path("/a/b.c.mp4")) == Path("/a/b.c")
+    assert report.base_of(Path("/a/b.live_chat.json")) == Path("/a/b")
+    assert report.base_of(Path("/a/b")) == Path("/a/b")
 
 
 # --- sidecar --------------------------------------------------------------
@@ -283,7 +284,7 @@ def test_stats_sampler_records_and_stops_when_offline(tmp_path):
                  wait=lambda _s: None)
     rows = [json.loads(l) for l in (tmp_path / "v.stats.jsonl").read_text().splitlines()]
     assert [r.get("viewers") for r in rows] == [10, 12, None, None]
-    assert hl.read_stats(tmp_path / "v.stats.jsonl") == [(rows[0]["t"], 10), (rows[1]["t"], 12)]
+    assert report.read_stats(tmp_path / "v.stats.jsonl") == [(rows[0]["t"], 10), (rows[1]["t"], 12)]
     assert "no longer live" in logs[-1]
 
 
@@ -331,7 +332,7 @@ def test_ydl_options_extras_never_request_subtitles():
 
 
 def test_stream_data_lifecycle(tmp_path):
-    from livecatch_core.worker import StreamData
+    from livecatch_core.stream_data import StreamData
 
     created = []
 
@@ -368,7 +369,7 @@ def test_stream_data_lifecycle(tmp_path):
 
 
 def test_stream_data_twitch_job(tmp_path):
-    from livecatch_core.worker import StreamData
+    from livecatch_core.stream_data import StreamData
 
     jobs = []
     settings = Settings(url="https://www.twitch.tv/SomeOne", save_dir=str(tmp_path))
