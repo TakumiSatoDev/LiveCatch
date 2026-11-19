@@ -11,7 +11,22 @@ from .chat import iter_chat_file
 from .highlights import SENSITIVITY, Options, analyze
 from .stream_files import StreamFiles, atomic_write_text, base_of, write_json
 
-__all__ = ["analyze_recording", "base_of", "main", "read_stats", "render_text"]
+__all__ = ["analyze_recording", "base_of", "main", "read_chat", "read_stats", "render_text"]
+
+
+def read_chat(path: Path) -> list:
+    """Read chat events, dropping exact duplicates.
+
+    A retried recording of the same broadcast appends its chat to the existing
+    file, and YouTube re-sends recent backlog on reconnect. Without this the
+    overlap would look like a comment surge at the retry point.
+    """
+    seen, events = set(), []
+    for event in iter_chat_file(path):
+        if event not in seen:
+            seen.add(event)
+            events.append(event)
+    return events
 
 
 def read_stats(path: Path) -> list[tuple[int, int]]:
@@ -72,7 +87,7 @@ def analyze_recording(path: Path, *, sensitivity: str = "normal", shift: float =
     stats = read_stats(files.stats)
     if chat_path is None and not stats:
         return None
-    events = list(iter_chat_file(chat_path)) if chat_path else []
+    events = read_chat(chat_path) if chat_path else []
     opts = Options.for_sensitivity(sensitivity)
     if max_highlights is not None:
         opts.max_highlights = max_highlights

@@ -379,3 +379,20 @@ def test_stream_data_twitch_job(tmp_path):
                str(tmp_path / "x.mp4"), from_start=False)
     assert jobs[0].service == "twitch" and jobs[0].twitch_login == "someone"
     assert jobs[0].url == "https://www.twitch.tv/someone"
+
+
+def test_retry_overlap_is_not_a_surge(tmp_path):
+    base = tmp_path / "rec"
+    events = synthetic_chat(burst_n=0)
+    with open(str(base) + ".chat.jsonl", "w", encoding="utf-8") as out:
+        for e in events:
+            out.write(e.to_json() + "\n")
+        # Retry at 20:00 re-sends the previous 60 s of backlog.
+        for e in events:
+            if 1140 * 1000 <= e.t_ms - T0 < 1200 * 1000:
+                out.write(e.to_json() + "\n")
+    (tmp_path / "rec.livecatch.json").write_text(json.dumps(
+        {"video_start_epoch_ms": T0, "duration": 2400.0}), encoding="utf-8")
+    assert len(report.read_chat(Path(str(base) + ".chat.jsonl"))) == len(set(events))
+    result, _json, _txt = report.analyze_recording(base)
+    assert result["highlights"] == []
