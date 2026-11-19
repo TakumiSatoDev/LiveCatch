@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.0.1
+
+### Fixed
+
+- Highlight detection no longer reports a false comment surge after a retried recording: chat appended by the retry (YouTube re-sends recent backlog) is de-duplicated when read.
+
+### Changed
+
+- Internal refactor of the v4 stream-data code (file naming in `stream_files`, per-recording logic in `stream_data`, reports/CLI in `highlight_report`); the worker exe bundles the new modules explicitly. No behaviour change.
+
 ## v4.0.0
 
 ### Added
